@@ -1058,12 +1058,12 @@ def main():
     parser.add_argument(
         "--args_list",
         default=None,
-        help="Optional list of args for each file."
+        help="Include list of args for each file, which can be specified after the argument."
     )
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="Overwrites files."
+        help="Overwrite files."
     )
 
     args = parser.parse_args()
