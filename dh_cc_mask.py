@@ -1138,6 +1138,12 @@ def main():
         help="Telescope version (for NEIDS)"
     )
     parser.add_argument(
+        "--path",
+        default=None,
+        nargs="*",
+        help="Path to directory containing spectrum data"
+    )
+    parser.add_argument(
         "--args_list",
         default=None,
         help="Include list of args for each file, which can be specified after the argument."

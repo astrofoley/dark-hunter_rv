@@ -1,6 +1,14 @@
 #!/bin/bash
 
-for file in ./data/*; do
+if [[ $* == *"--path"* ]]; then
+    target="--path"
+    path_par=$(awk -v target="$target" '{split($0, arr, " "); for(i=1; i<=length(arr); i++) if(arr[i] == target) print arr[i+1];}' <<< "$*")
+    pathname=$(awk -v var="$path_par" '$0~var {var=$0; exit} END {print var}' "$path_par")
+else
+  pathname="./data"
+  fi
+
+for file in "$pathname"/*; do
   filename=$(echo "$file" | awk -F'/' '{print $NF}')
   if [[ $* == *"--args_list"* ]]; then
     target="--args_list"
