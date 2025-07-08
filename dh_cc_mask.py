@@ -22,6 +22,8 @@ from astropy.coordinates import SkyCoord
 import glob
 import os
 
+from datetime import datetime
+
 from astroquery.gaia import Gaia
 
 
@@ -30,9 +32,12 @@ def suppress_warnings():
     warnings.filterwarnings("ignore")
 
 
-def find_duplicates(filename):
+def find_duplicates(filename, last_modified):
     """
-    Finds duplicate entries in output folder
+    Finds duplicate entries in output folder.
+    Parameters:
+        filename: Spectrum data file
+        last_modified: Last modified date of spectrum data file
     Returns:
         break_flag: True if duplicate, false otherwise
     """
@@ -43,9 +48,38 @@ def find_duplicates(filename):
 
     base_name = os.path.splitext(os.path.basename(filename))[0]
     output_file = os.path.join(output_dir, f"{base_name}_orders.txt")
+
     if os.path.exists(output_file):
-        break_flag = True
+        with open(output_file, "r") as f:
+            last_date = f.readline()
+            if "# Date last modified:" in last_date:
+
+                last_date = last_date.replace("# Date last modified: ", "")
+                last_date = last_date.replace("\n", "")
+                last_date = datetime.strptime(last_date, "%Y-%m-%d %H:%M:%S.%f")
+                print(f"Date last modified: {last_date}")
+
+                if last_date < last_modified:
+                    print(f"Recent edits to data. Overwriting...")
+                    pass
+                else:
+                    break_flag = True
+            else:
+                pass
+
     return break_flag
+
+def detect_changes(file_path):
+    """
+    Detects when a file was last modified.
+    Parameters:
+        file_path: path to spectrum file
+    Returns:
+        date: Datetime object with date of last modifications
+    """
+    last_modified = os.path.getmtime(file_path)
+    date = datetime.fromtimestamp(last_modified)
+    return date
 
 
 def read_spectrum(filename):
@@ -58,6 +92,13 @@ def read_spectrum(filename):
     header = []
     spectrum_data = {}  # Dictionary to store data for each order
     current_order = None  # Track the current order
+
+    if "order" in filename:  # for 1 order spectrums
+        filename_list = filename.split("_")
+        order_index = filename_list.index("order")
+        current_order = filename_list[order_index + 1]
+        current_order = int(''.join(num for num in current_order if num.isdigit()))
+        spectrum_data[current_order] = {"wavelength": [], "flux": [], "eflux": []}
 
     with open(filename, 'r') as f:
         for line in f:
@@ -289,7 +330,7 @@ def read_bias(filename):
 def read_bias_suborders(filename):
     """
     Reads and stores the bias as a dictionary, with suborders
-    Assumes bias is already
+    Assumes bias already has suborders
     """
     bias = {}
 
@@ -311,6 +352,54 @@ def read_bias_suborders(filename):
 
     bias_suborder = True
     return bias, bias_suborder
+
+def bias_determination(filename, bias_check, suborder_int):
+    """
+    Determines which bias to use.
+    Parameters:
+        filename: Name of bias file
+        bias_check: Boolean determining whether to use bias
+        suborder_int: Number of suborders
+    Returns:
+        bias: An array (1 suborder) or dictionary with bias data
+        suborder_check: Boolean determining if bias file contains suborders
+    """
+    suborder_check = False
+    if not bias_check:
+        with open(filename, "r") as file:
+            content = file.read()
+            if content.__contains__("Suborder"):
+                bias, suborder_check = read_bias_suborders(filename)
+                if suborder_int == 1:
+                    new_bias = np.zeros((70, 3))
+                    for order in bias.keys():
+                        try:
+                            new_bias[order, :] = bias[order][0]
+                        except KeyError:
+                            for i in range(0, 10):
+                                try:
+                                    new_bias[order, :] = bias[order][i]
+                                    break
+                                except KeyError:
+                                    new_bias[order, :] = np.array([0, 0, 0])
+                    bias = new_bias
+                    suborder_check = False  # Fall back to no suborder bias
+            else:
+                bias = read_bias(filename)
+
+    if bias_check:
+        if suborder_int == 1:
+            bias = np.zeros((70, 3))  # Empty bias
+        else:
+            bias = {}  # Empty bias for suborders
+            suborder_check = True
+            for i in range(70):
+                for suborder in range(suborder_int):
+                    if i not in bias.keys():
+                        bias.update({i: {}})
+                    bias[i].update({suborder: [0, 0, 0]})
+
+    return bias, suborder_check
 
 
 def read_stellar_mask(spectral_type, telescope, version, directory="stellar_masks/", ):
@@ -613,7 +702,7 @@ def cross_correlate_stellar_mask(obs_wavelength, obs_flux, mask_wavelength, mask
     return best_velocity_shift, best_velocity_err, velocity_shifts, cross_corr
 
 
-def write_order_results(order_data, input_filename, suborders_in):
+def write_order_results(order_data, input_filename, suborders_in, last_modified):
     """
     Writes order-level RV results, including skipped orders as NaN values.
 
@@ -632,6 +721,8 @@ def write_order_results(order_data, input_filename, suborders_in):
 
     # Write data
     with open(output_file, "w") as f:
+
+        f.write(f"# Date last modified: {last_modified}\n")
 
         if suborders_in != 1:
             f.write("# Order | Suborder | RV (km/s) | RV Error (km/s)\n")
@@ -780,9 +871,14 @@ def process_spectrum(spectrum_file, spectral_type, telescope, version, sub_order
     order_flag = True
     bias_suborder = False
 
+    modified_date = detect_changes(spectrum_file)
+
+    if args.no_bias:
+        no_bias = True
+
     if not args.overwrite:
         # exits function if the file already exists
-        break_flag = find_duplicates(spectrum_file)
+        break_flag = find_duplicates(spectrum_file, modified_date)
         if break_flag:
             write_summary_flag = False
             return write_summary_flag, break_flag
@@ -792,7 +888,8 @@ def process_spectrum(spectrum_file, spectral_type, telescope, version, sub_order
     if "Gaia" in spectrum_file:
         # For GAIA data
         header, spectrum_data = read_spectrum(spectrum_file)
-        object_id = spectrum_file.split("_")[2]
+        file_name = spectrum_file.split("/")[-1]
+        object_id = file_name.split("_")[2]
     elif "med" or "spec" in spectrum_file:
         # for LAMOST data
         header, spectrum_data, object_id = read_lamost_spectrum(spectrum_file)
@@ -836,22 +933,7 @@ def process_spectrum(spectrum_file, spectral_type, telescope, version, sub_order
     # 43, 45,  everything <=25
 
     # Determines bias depending on bias flag and suborder
-    if not no_bias:
-        if sub_order == 1:
-            bias = read_bias("bias_statistics.txt")
-        else:
-            bias, bias_suborder = read_bias_suborders("bias_statistics.txt")
-    else:
-        if sub_order == 1:
-            bias = np.zeros((70, 3))  # Empty bias
-        else:
-            bias = {}  # Empty bias for suborders
-            bias_suborder = True
-            for i in range(70):
-                for suborder in range(sub_order):
-                    if i not in bias.keys():
-                        bias.update({i: {}})
-                    bias[i].update({suborder: [0, 0, 0]})
+    bias, bias_suborder = bias_determination("bias_statistics.txt", no_bias, sub_order)
 
     for order_int, order in spectrum_data.items():
         if order_int not in bad_orders:
@@ -939,7 +1021,7 @@ def process_spectrum(spectrum_file, spectral_type, telescope, version, sub_order
     order_rv_errs = np.array(order_rv_errs)
 
     # Write all data to file
-    write_order_results(rv_results, spectrum_file, sub_order)
+    write_order_results(rv_results, spectrum_file, sub_order, modified_date)
 
     sigma_val = 2.2
     # Sigma_val = 4
