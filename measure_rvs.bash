@@ -15,7 +15,7 @@ for file in "$pathname"/*; do
     file_list=$(awk -v target="$target" '{split($0, arr, " "); for(i=1; i<=length(arr); i++) if(arr[i] == target) print arr[i+1];}' <<< "$*")
     filename=$(awk -v var="$filename" '$0~var {var=$0; exit} END {print var}' "$file_list")
   fi
-  filename="./data/$filename"
+  filename="$pathname/$filename"
   read filename args <<< "$filename"
   python3 dh_cc_mask.py $filename $args $*
 done
