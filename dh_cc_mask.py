@@ -498,7 +498,7 @@ def process_spectrum(spectrum_file, spectral_type="G2", args=None):
 
     # Read spectrum and stellar mask
     header, spectrum_data = read_spectrum(spectrum_file)
-    mask_data = read_stellar_mask(spectral_type="G2")
+    mask_data = read_stellar_mask(spectral_type=spectral_type)
 
     #Extract MJD
     mjd = extract_mjd_from_header(header)
