@@ -10,16 +10,70 @@ import matplotlib.pyplot as plt
 
 from scipy.interpolate import UnivariateSpline, LSQUnivariateSpline
 from scipy.signal import correlate, savgol_filter, detrend, butter, filtfilt, medfilt
-
 from scipy.optimize import curve_fit
-from astropy.time import Time
-from astropy.stats import sigma_clip
 from scipy.stats import sem
 from scipy.ndimage import median_filter
 
+from astropy.time import Time
+from astropy.stats import sigma_clip
+import astropy.io.fits as fits
+
 import glob
 import os
-import astropy.io.fits as fits
+
+
+# ---------------------- Instrument Profile Abstraction ------------------------
+class InstrumentProfile:
+    def __init__(
+        self,
+        name,
+        file_format,
+        num_orders,
+        bias_file,
+        bad_orders,
+        mask_directory,
+        header_keywords,
+    ):
+        self.name = name
+        self.file_format = file_format
+        self.num_orders = num_orders
+        self.bias_file = bias_file
+        self.bad_orders = bad_orders
+        self.mask_directory = mask_directory
+        self.header_keywords = header_keywords
+
+# Register available instruments
+INSTRUMENTS = {
+    "APF": InstrumentProfile(
+        name="APF",
+        file_format="txt",
+        num_orders=70,
+        bias_file="bias_statistics.txt",
+        bad_orders=[0,1,2,53,57,58,59,60,63,64,65],
+        mask_directory="stellar_masks/",
+        header_keywords={"mjd": "# THEMIDPT"},
+    ),
+    "GHOST": InstrumentProfile(
+        name="GHOST",
+        file_format="fits",
+        num_orders=68,
+        bias_file=None,
+        bad_orders=[],
+        mask_directory="stellar_masks/",
+        header_keywords={"bjd": "BJD"},
+    ),
+    # Add more instrument profiles as needed
+}
+
+def get_instrument_profile(args):
+    """Return the instrument profile specified by args.instrument."""
+    instrument_name = getattr(args, "instrument", None)
+    if instrument_name is None:
+        raise ValueError("No instrument specified and no default provided.")
+    if instrument_name not in INSTRUMENTS:
+        raise ValueError(f"Instrument '{instrument_name}' not recognized. "
+                         f"Available instruments: {list(INSTRUMENTS.keys())}")
+    return INSTRUMENTS[instrument_name]
 
 
 
@@ -58,6 +112,43 @@ def read_spectrum(filename):
     return header, spectrum_data
 
 
+# --------------------- GHOST spectrum FITS reader --------------------------
+def read_spectrum_ghost(filename):
+    """
+    Reads a GHOST spectrum FITS file and splits it into 68 equal-width segments.
+    Returns header (dict) and spectrum_data (dict of orders).
+    """
+    hdul = fits.open(filename)
+    sci = hdul["SCI"]
+    hdr = sci.header
+    flux = sci.data
+    cd1_1 = hdr["CD1_1"]
+    crval1 = hdr["CRVAL1"]
+    crpix1 = hdr["CRPIX1"]
+    naxis1 = hdr["NAXIS1"]
+    # Calculate log-wavelength grid in nm
+    wave = crval1 * np.exp(cd1_1 * (np.arange(naxis1) + 1 - crpix1) / crval1)
+
+    wave_angstrom = wave * 10  # convert nm to Angstroms
+    eflux = np.sqrt(np.abs(flux))
+    # Split into 68 equal-width segments in wavelength
+    num_orders = 68
+    indices = np.linspace(0, naxis1, num_orders+1, dtype=int)
+    spectrum_data = {}
+    for i in range(num_orders):
+        idx0 = indices[i]
+        idx1 = indices[i+1]
+        spectrum_data[i] = {
+            "wavelength": wave_angstrom[idx0:idx1].tolist(),
+            "flux": flux[idx0:idx1].tolist(),
+            "eflux": eflux[idx0:idx1].tolist(),
+        }
+    header = hdr
+    hdul.close()
+    return header, spectrum_data
+
+
+
 def read_bias(filename):
     bias = np.zeros((70,3))
     current_order = None  # Track the current order
@@ -73,6 +164,7 @@ def read_bias(filename):
             bias[int(values[0]), :] = [float(values[1]), float(values[2]), float(values[3])]
                 
     return bias
+
 
 
 def read_stellar_mask(spectral_type="G2", directory="stellar_masks/", telescope="espresso"):
@@ -264,7 +356,21 @@ def fit_continuum(wavelength, flux, eflux, num_knots=10, order=3):
     
 
 
-def extract_mjd_from_header(header):
+def extract_mjd_from_header(header, instrument=None):
+    """
+    Extract the MJD from the header. For APF, uses # THEMIDPT.
+    For GHOST, extracts BJD and converts to MJD.
+    """
+    if instrument is not None and hasattr(instrument, "header_keywords"):
+        if "bjd" in instrument.header_keywords:
+            # GHOST: header is a FITS header object
+            bjd_key = instrument.header_keywords["bjd"]
+            if bjd_key in header:
+                bjd_val = header[bjd_key]
+                # Convert BJD to MJD using astropy Time
+                time = Time(bjd_val, format='jd', scale='utc')
+                return time.mjd
+    # Default: APF style (text header)
     for line in header:
         if line.startswith("# THEMIDPT"):
             date_str = line.split('=')[1].strip()
@@ -395,8 +501,11 @@ def write_summary(processed_data):
     output_dir = "output"
     os.makedirs(output_dir, exist_ok=True)
 
-    # Extract object ID from input file name
-    base_name = os.path.splitext(os.path.basename(processed_data["file"]))[0]
+    if not processed_data:
+        return
+
+    # Extract object ID from first entry's input file name
+    base_name = os.path.splitext(os.path.basename(processed_data[0]["file"]))[0]
     object_id = base_name.split("_")[2]  # Assumes filename structure
 
     # Define summary file for the object
@@ -415,17 +524,9 @@ def write_summary(processed_data):
                 existing_entries[filename] = line.strip()
 
     # Update entries with new data
-    new_entry = f"{processed_data['file']} {processed_data['mjd']:.8f} {processed_data['rv']:.8f} {processed_data['rv_err']:.8f} {processed_data['rv_rms']:.8f}"
-    existing_entries[processed_data['file']] = new_entry  # Overwrite if exists
-
-
-#    for entry in processed_data:
-#        print(processed_data)
-#        print(processed_data.keys())
-#        print(entry)
-#        print(entry.keys())
-#        new_entry = entry['file'] + f" {entry['mjd']:.8f} {entry['rv']:.8f} {entry['rv_err']:.8f} {entry['rv_rms']:.8f}"
-#        existing_entries[entry['file']] = new_entry  # Overwrite if exists
+    for entry in processed_data:
+        new_entry = f"{entry['file']} {entry['mjd']:.8f} {entry['rv']:.8f} {entry['rv_err']:.8f} {entry['rv_rms']:.8f}"
+        existing_entries[entry['file']] = new_entry  # Overwrite if exists
 
     # Write updated summary file
     with open(output_file, "w") as f:
@@ -435,6 +536,7 @@ def write_summary(processed_data):
             f.write(line + "\n")
             
     logging.info(f"Summary written to {output_file}")
+
 
 
 def old_write_summary(processed_data, output_file):
@@ -466,21 +568,20 @@ def plot_results(processed_data, save=False, show=False, save_path=None):
         show_plots (bool): Whether to display plots on-screen.
     """
     plt.figure(figsize=(8, 5))
-    plt.title(f"Radial Velocity for XXX")
+    plt.title("Radial Velocity")
 
     for entry in processed_data:
-
         plt.errorbar(
             [entry["mjd"]],
-            [entry["radial_velocity"]],
-            yerr=[entry["radial_velocity_rms"]],
+            [entry["rv"]],
+            yerr=[entry["rv_rms"]],
             fmt="o"
         )
 
     plt.xlabel("MJD")
     plt.ylabel("Radial Velocity (km/s)")
 
-    if save and save_path != None:
+    if save and save_path is not None:
         plot_dir = Path("plots")
         plot_dir.mkdir(exist_ok=True)
         plt.savefig(save_path)
@@ -490,18 +591,21 @@ def plot_results(processed_data, save=False, show=False, save_path=None):
 
 
 
-
-
-
-def process_spectrum(spectrum_file, spectral_type="G2", args=None):
+def process_spectrum(spectrum_file, spectral_type="G2", args=None, instrument=None):
     """Main function to process a spectrum and compute radial velocities."""
 
+    if instrument is None:
+        instrument = INSTRUMENTS["APF"]
+
     # Read spectrum and stellar mask
-    header, spectrum_data = read_spectrum(spectrum_file)
-    mask_data = read_stellar_mask(spectral_type=spectral_type)
+    if instrument.file_format == "fits" and instrument.name == "GHOST":
+        header, spectrum_data = read_spectrum_ghost(spectrum_file)
+    else:
+        header, spectrum_data = read_spectrum(spectrum_file)
+    mask_data = read_stellar_mask(spectral_type=spectral_type, directory=instrument.mask_directory)
 
     #Extract MJD
-    mjd = extract_mjd_from_header(header)
+    mjd = extract_mjd_from_header(header, instrument=instrument)
 
     mask_wavelength = np.array(mask_data["wavelength"])
     mask_strength = np.array(mask_data["flux"])
@@ -514,18 +618,15 @@ def process_spectrum(spectrum_file, spectral_type="G2", args=None):
     order_rv_errs = []
 
     # List of orders to avoid
-    bad_orders = [0,1,2,53,57,58,59,60,63,64,65]
-    #bad_orders = [30, 31, 32, 43, 45]
-    #43, 45,  everything <=25
+    bad_orders = instrument.bad_orders
 
-    bias = np.zeros((70,3))
+    bias = np.zeros((instrument.num_orders,3))
 
     if not args.no_bias:
-        bias = read_bias("bias_statistics.txt")
+        bias = read_bias(instrument.bias_file)
         
     for order, data in spectrum_data.items():
         if order not in bad_orders:
-#        if order in bad_orders:
             wavelength = np.array(data["wavelength"])
             flux = np.array(data["flux"])
             eflux = np.array(data["eflux"])
@@ -545,7 +646,12 @@ def process_spectrum(spectrum_file, spectral_type="G2", args=None):
                         )
 
                         # Store results
-                        rv_results[order] = {"velocity_shifts": velocity_shifts, "cross_corr": cross_corr, "best_rv": best_rv-bias[order,0], "best_rv_err": np.sqrt(best_rv_err**2 + bias[order,1]**2 + bias[order,2]**2)}
+                        rv_results[order] = {
+                            "velocity_shifts": velocity_shifts,
+                            "cross_corr": cross_corr,
+                            "best_rv": best_rv-bias[order,0],
+                            "best_rv_err": np.sqrt(best_rv_err**2 + bias[order,1]**2 + bias[order,2]**2)
+                        }
                         order_rvs.append(best_rv-bias[order,0])
                         order_rv_errs.append(np.sqrt(best_rv_err**2 + bias[order,1]**2 + bias[order,2]**2))
 
@@ -581,41 +687,32 @@ def process_spectrum(spectrum_file, spectral_type="G2", args=None):
     if len(bad_index) == len(order_rvs) and np.any(bad_index):
         # Remove flagged items from arrays
         order_rvs = order_rvs[~bad_index]
-        order_rv_errs = order_rv_errs[~bad_index]  # <- This was incorrectly using `order_rvs`
+        order_rv_errs = order_rv_errs[~bad_index]
 
         # Remove corresponding dictionary entries
-        # Convert keys to a sorted list so indexing aligns
         dict_keys_sorted = sorted(rv_results.keys())  # Ensure the keys align with array indices
         keys_to_remove = [key for i, key in enumerate(dict_keys_sorted) if bad_index[i]]
 
         for key in keys_to_remove:
-            rv_results.pop(key, None)  # Remove the key safely
+            rv_results.pop(key, None)
 
     sigma_val = 2.2
-    #sigma_val = 4
     bad_array = sigma_clip(order_rvs, sigma=sigma_val, maxiters=None, masked=True, copy=False)
     bad_index = bad_array.mask
 
-    # Ensure bad_index is the same length as order_rvs
     if (len(bad_index) == len(order_rvs)) and (np.sum(bad_index) > 0):
-        # Remove flagged items from arrays
         order_rvs = order_rvs[~bad_index]
-        order_rv_errs = order_rv_errs[~bad_index]  # <- This was incorrectly using `order_rvs`
-
-        # Remove corresponding dictionary entries
-        # Convert keys to a sorted list so indexing aligns
-        dict_keys_sorted = sorted(rv_results.keys())  # Ensure the keys align with array indices
+        order_rv_errs = order_rv_errs[~bad_index]
+        dict_keys_sorted = sorted(rv_results.keys())
         keys_to_remove = [key for i, key in enumerate(dict_keys_sorted) if bad_index[i]]
-
         for key in keys_to_remove:
-            rv_results.pop(key, None)  # Remove the key safely
+            rv_results.pop(key, None)
 
     mean_rv = np.average(order_rvs, weights=1/order_rv_errs**2)
     mean_rv_err = np.sqrt(1/np.sum(1/order_rv_errs**2))
     rms_rv = np.sum((order_rvs - mean_rv)**2 / order_rv_errs**2) / np.sum(1/order_rv_errs**2)
 
     if args.show_plots:
-        # Plot radial velocity as function of order
         plt.figure(figsize=(8, 5))
         plt.errorbar(rv_results.keys(), order_rvs, yerr=order_rv_errs, fmt='o', capsize=4, label="Order RVs")
         plt.axhline(mean_rv, color='red', linestyle='--', label=f"Mean RV = {mean_rv:.2f} km/s")
@@ -626,14 +723,10 @@ def process_spectrum(spectrum_file, spectral_type="G2", args=None):
         plt.grid()
         plt.show()
 
-    # Print final results
     print(f"Overall Best Radial Velocity: {mean_rv:.2f} km/s")
-    print(f"RMS of Orders: {rms_rv:.2f} km/s")
-
+    print(f"RMS of Orders: {rms_rv:.4f} km/s")
 
     return {"file": spectrum_file, "mjd": mjd, "rv": mean_rv, "rv_err": mean_rv_err, "rv_rms": rms_rv}
-
-
 
 
 
@@ -684,6 +777,11 @@ def main():
         default="50",
         help="Effective Temperature."
     )
+    parser.add_argument(
+        "--instrument",
+        default="APF",
+        help="Instrument profile to use (default: APF)."
+    )
 
     args = parser.parse_args()
 
@@ -694,46 +792,29 @@ def main():
     else:
         logging.basicConfig(level=logging.INFO)
 
-    # Expand input file wildcards
-#    input_files = []
-#    for pattern in args.input_files:
-#        input_files.extend(Path().glob(pattern))
-#    input_files = sorted(set(input_files))  # Remove duplicates
+    input_files = args.input_file
 
-    input_file = args.input_file[0]
-
-    if not input_file:
+    if not input_files:
         logging.error("No file found. Please check the input pattern or file paths.")
         return
 
-    logging.info(f"Found {len(input_file)} input files. Processing...")
+    logging.info(f"Found {len(input_files)} input files. Processing...")
 
+    # Get instrument profile
+    instrument = get_instrument_profile(args)
 
-    stellar_mask_files = glob.glob('stellar_masks/*')
-
-    rv_results = process_spectrum(input_file, spectral_type="F9", args=args)
-
-#    # Process each spectrum file
-#    processed_data = []
-#    for i, file in enumerate(input_files):
-#        rv_results = find_best_standard_star(file, standard_star_files, float(args.teff), args)
-#        processed_data.append(rv_results)
+    rv_results = []
+    for spectrum_file in input_files:
+        result = process_spectrum(spectrum_file, spectral_type="F9", args=args, instrument=instrument)
+        rv_results.append(result)
 
     # Write summary
     write_summary(rv_results)
 
     # Generate plots if requested
     if args.save_plots or args.show_plots:
-        plot_filename = f"plots/{Path(input_file).stem}_plot.png"
+        plot_filename = f"plots/{Path(input_files[0]).stem}_plot.png"
         plot_results(rv_results, save=args.save_plots, save_path=plot_filename, show=args.show_plots)
-
-#    # Save results to output file
-#    with open(args.output_file, "w") as f:
-#        f.write("#MJD,Radial_Velocity,Radial_Velocity_RMS,Correlation_Coefficient,Best_Standard\n")
-#        for data in processed_data:
-#            f.write(
-#                f"{data['mjd']},{data['radial_velocity']},{data['radial_velocity_rms']},{data['correlation_coefficient']},{data['best_standard']}\n"
-#            )
 
 if __name__ == "__main__":
     main()
@@ -746,5 +827,4 @@ if __name__ == "__main__":
 #CR clean the spectrum before CC?
 #Sigma clip order RVs?
 #Fit Gaussian width to get error for order - improve this
-#Write to file
 #Smaller chunks?
