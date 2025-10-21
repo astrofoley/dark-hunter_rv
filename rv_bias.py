@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+<<<<<<< HEAD
 def check_suborder(filepath):
     """
     Determines if an order results file contains suborders.
@@ -51,12 +52,24 @@ def read_data(directory):
                 if not suborder_check:
                     df["Suborder"] = 0
 
+=======
+def read_data(directory):
+    data = []
+    for file in os.listdir(directory):
+        if file.endswith("_orders.txt"):
+            filepath = os.path.join(directory, file)
+            star_name = "_".join(file.split("_")[:3])  # Extract star name
+            epoch = int(file.split("epoch_")[1].split("_")[0])  # Extract epoch number
+            df = pd.read_csv(filepath, sep='\s+', comment='#',
+                             names=["Order", "RV", "RV_Error"])
+>>>>>>> 32fd2810e6c82736dcf881af4d248f9475491048
             df["Order"] = pd.to_numeric(df["Order"], errors="coerce")
             df["RV"] = pd.to_numeric(df["RV"], errors="coerce")
             df["RV_Error"] = pd.to_numeric(df["RV_Error"], errors="coerce")
             df["Star"] = star_name
             df["Epoch"] = epoch
             data.append(df)
+<<<<<<< HEAD
 
     return pd.concat(data, ignore_index=True), first_suborder_check
 
@@ -85,6 +98,28 @@ def compute_bias(df, sigma=2.2, max_iter=20, tol=1e-3):
             prev_len = len(filtered_group)
             group = filtered_group  # Update the group for the next iteration
 
+=======
+    return pd.concat(data, ignore_index=True)
+
+def compute_bias(df, sigma=2.2, max_iter=20, tol=1e-3):
+    biases = []
+    for (star, epoch), group in df.groupby(["Star", "Epoch"]):
+        prev_len = len(group)
+        
+        for _ in range(max_iter):
+            median_rv = np.median(group["RV"])
+            std_rv = np.std(group["RV"])
+            
+            # Sigma clipping: Remove outliers beyond sigma threshold
+            filtered_group = group[np.abs(group["RV"] - median_rv) <= sigma * std_rv]
+            
+            if len(filtered_group) == prev_len or abs(len(filtered_group) - prev_len) / prev_len < tol:
+                break  # Convergence reached
+            
+            prev_len = len(filtered_group)
+            group = filtered_group  # Update the group for the next iteration
+        
+>>>>>>> 32fd2810e6c82736dcf881af4d248f9475491048
         if len(group) > 0:
             weights = 1 / group["RV_Error"]**2
             weighted_mean_rv = np.sum(group["RV"] * weights) / np.sum(weights)
@@ -93,11 +128,15 @@ def compute_bias(df, sigma=2.2, max_iter=20, tol=1e-3):
 
     return pd.concat(biases, ignore_index=True) if biases else pd.DataFrame(columns=df.columns)
 
+<<<<<<< HEAD
 
 def compute_statistics(df, groupby_cols):
     """
     Computes statistics from bias correction.
     """
+=======
+def compute_statistics(df, groupby_cols):
+>>>>>>> 32fd2810e6c82736dcf881af4d248f9475491048
     stats = df.groupby(groupby_cols).apply(lambda g: pd.Series({
         "Bias_Mean": np.average(g["Bias"], weights=1/g["RV_Error"]**2),
         "Bias_Error": np.sqrt(1 / np.sum(1/g["RV_Error"]**2)),
@@ -106,6 +145,7 @@ def compute_statistics(df, groupby_cols):
     })).reset_index()
     return stats
 
+<<<<<<< HEAD
 
 def plot_bias(df, stats, title):
     """
@@ -120,6 +160,18 @@ def plot_bias(df, stats, title):
         plt.errorbar(stats["Order"], stats["Bias_Mean"],
              yerr=stats["Bias_RMS"], fmt='o', capsize=5,
              color='red', label='RMS Bias Error')
+=======
+def plot_bias(df, stats, title):
+    plt.figure(figsize=(10, 6))
+    for star, group in df.groupby("Star"):
+        plt.scatter(group["Order"], group["Bias"], label=f"{star}", alpha=0.5)
+    plt.errorbar(stats["Order"], stats["Bias_Mean"],
+                 yerr=stats["Bias_Error"], fmt='o', capsize=5,
+                 color='black', label='Mean Bias Error')
+    plt.errorbar(stats["Order"], stats["Bias_Mean"],
+                 yerr=stats["Bias_RMS"], fmt='o', capsize=5,
+                 color='red', label='RMS Bias Error')
+>>>>>>> 32fd2810e6c82736dcf881af4d248f9475491048
     plt.axhline(0, color='gray', linestyle='--')
     plt.xlabel("Order")
     plt.ylabel("Bias (km/s)")
@@ -127,6 +179,7 @@ def plot_bias(df, stats, title):
     plt.title(title)
     plt.show()
 
+<<<<<<< HEAD
 
 def main():
     directory = "../output/"
@@ -155,3 +208,23 @@ def main():
 
 if __name__ == "__main__":
     main()
+=======
+def main():
+    directory = "output/"
+    df = read_data(directory)
+    df_filtered = compute_bias(df)
+    
+    all_stats = compute_statistics(df_filtered, ["Order"])
+    per_star_stats = compute_statistics(df_filtered, ["Star", "Order"])
+    
+    plot_bias(df_filtered, all_stats, "Radial Velocity Bias Across All Data")
+    
+    for star, group in df_filtered.groupby("Star"):
+        star_stats = per_star_stats[per_star_stats["Star"] == star]
+        plot_bias(group, star_stats, f"Radial Velocity Bias for {star}")
+    
+    all_stats.to_csv("bias_statistics.txt", index=False, sep=" ")
+
+if __name__ == "__main__":
+    main()
+>>>>>>> 32fd2810e6c82736dcf881af4d248f9475491048
