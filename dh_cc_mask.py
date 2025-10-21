@@ -18,11 +18,13 @@ from astropy.time import Time
 from astropy.stats import sigma_clip
 import astropy.io.fits as fits
 
+import pandas as pd
+
 import glob
 import os
 
 
-# ---------------------- Instrument Profile Abstraction ------------------------
+# ---------------------- Instrument Profiles ------------------------
 class InstrumentProfile:
     def __init__(
         self,
@@ -62,9 +64,20 @@ INSTRUMENTS = {
         mask_directory="stellar_masks/",
         header_keywords={"bjd": "BJD"},
     ),
-    # Add more instrument profiles as needed
+    "MAROON-X": InstrumentProfile(
+        name="MAROON-X",
+        file_format="hd5",
+        num_orders=61,
+        bias_file=None,
+        bad_orders=[],
+        mask_directory="stellar_masks/",
+        header_keywords={"jd": "JD_UTC_FLUXWEIGHTED_FRD"},
+    ),
 }
 
+
+
+# ---------------------- Main Functions ------------------------
 def get_instrument_profile(args):
     """Return the instrument profile specified by args.instrument."""
     instrument_name = getattr(args, "instrument", None)
@@ -112,13 +125,29 @@ def read_spectrum(filename):
     return header, spectrum_data
 
 
-# --------------------- GHOST spectrum FITS reader --------------------------
-def read_spectrum_ghost(filename):
+
+def read_spectrum_ghost(blue_filename):
     """
-    Reads a GHOST spectrum FITS file and splits it into 68 equal-width segments.
-    Returns header (dict) and spectrum_data (dict of orders).
+    Reads a GHOST blue FITS file, automatically finds the corresponding red file,
+    and splits them into chunks. Returns header and combined spectrum_data.
     """
-    hdul = fits.open(filename)
+    spectrum_data = {}
+    header = None
+    order_index = 0
+
+    if isinstance(blue_filename, (list, tuple)):
+        # Take the first element if somehow a list is passed
+        if len(blue_filename) != 1:
+            raise ValueError("read_spectrum_ghost expected a single filename, got multiple.")
+        blue_filename = blue_filename[0]
+
+    if "blue" not in blue_filename.lower():
+        raise ValueError(f"File {blue_filename} does not contain 'blue' in its name.")
+
+    red_filename = blue_filename.replace("blue", "red")
+
+    # --- Process blue file ---
+    hdul = fits.open(blue_filename)
     sci = hdul["SCI"]
     hdr = sci.header
     flux = sci.data
@@ -126,29 +155,108 @@ def read_spectrum_ghost(filename):
     crval1 = hdr["CRVAL1"]
     crpix1 = hdr["CRPIX1"]
     naxis1 = hdr["NAXIS1"]
-    # Calculate log-wavelength grid in nm
     wave = crval1 * np.exp(cd1_1 * (np.arange(naxis1) + 1 - crpix1) / crval1)
-
     wave_angstrom = wave * 10  # convert nm to Angstroms
     eflux = np.sqrt(np.abs(flux))
-    # Split into 68 equal-width segments in wavelength
-    num_orders = 68
-    indices = np.linspace(0, naxis1, num_orders+1, dtype=int)
-    spectrum_data = {}
-    for i in range(num_orders):
+    num_chunks = 30
+    indices = np.linspace(0, naxis1, num_chunks + 1, dtype=int)
+    for i in range(num_chunks):
         idx0 = indices[i]
-        idx1 = indices[i+1]
-        spectrum_data[i] = {
+        idx1 = indices[i + 1]
+        spectrum_data[order_index] = {
             "wavelength": wave_angstrom[idx0:idx1].tolist(),
             "flux": flux[idx0:idx1].tolist(),
             "eflux": eflux[idx0:idx1].tolist(),
         }
-    header = hdr
+        order_index += 1
+    # Save header from blue file as representative
+    if header is None:
+        header = hdr
     hdul.close()
+
+    # --- Process red file ---
+    hdul = fits.open(red_filename)
+    sci = hdul["SCI"]
+    hdr_red = sci.header
+    flux = sci.data
+    cd1_1 = hdr_red["CD1_1"]
+    crval1 = hdr_red["CRVAL1"]
+    crpix1 = hdr_red["CRPIX1"]
+    naxis1 = hdr_red["NAXIS1"]
+    wave = crval1 * np.exp(cd1_1 * (np.arange(naxis1) + 1 - crpix1) / crval1)
+    wave_angstrom = wave * 10  # convert nm to Angstroms
+    eflux = np.sqrt(np.abs(flux))
+    num_chunks = 31
+    indices = np.linspace(0, naxis1, num_chunks + 1, dtype=int)
+    for i in range(num_chunks):
+        idx0 = indices[i]
+        idx1 = indices[i + 1]
+        spectrum_data[order_index] = {
+            "wavelength": wave_angstrom[idx0:idx1].tolist(),
+            "flux": flux[idx0:idx1].tolist(),
+            "eflux": eflux[idx0:idx1].tolist(),
+        }
+        order_index += 1
+    hdul.close()
+        
     return header, spectrum_data
 
 
 
+def read_spectrum_maroonx(filename):
+    """
+    Reads a MAROON-X hd5 file and combines red and blue arms into
+    a unified dict of orders with Angstrom wavelengths.
+    """
+    store = pd.HDFStore(filename, 'r')
+
+    spec_blue   = store['spec_blue']
+    header_blue = store['header_blue']
+    spec_red    = store['spec_red']
+    header_red  = store['header_red']
+
+    # Orders
+    orders_blue = spec_blue.index.levels[1]
+    if 91 in orders_blue:
+        orders_blue = orders_blue.drop(91)  # recommended
+    orders_red = spec_red.index.levels[1]
+
+    spectrum_data = {}
+    order_index = 0
+
+    # Blue arm
+    for o in orders_blue:
+        wave_nm = spec_blue['wavelengths'][6][o]
+        flux = spec_blue['optimal_extraction'][6][o]
+        wave_angstrom = np.array(wave_nm) * 10.0
+        eflux = np.sqrt(np.abs(flux))
+        spectrum_data[order_index] = {
+            "wavelength": wave_angstrom.tolist(),
+            "flux": flux.tolist(),
+            "eflux": eflux.tolist()
+        }
+        order_index += 1
+
+    # Red arm
+    for o in orders_red:
+        wave_nm = spec_red['wavelengths'][6][o]
+        flux = spec_red['optimal_extraction'][6][o]
+        wave_angstrom = np.array(wave_nm) * 10.0
+        eflux = np.sqrt(np.abs(flux))
+        spectrum_data[order_index] = {
+            "wavelength": wave_angstrom.tolist(),
+            "flux": flux.tolist(),
+            "eflux": eflux.tolist()
+        }
+        order_index += 1
+
+    store.close()
+
+    # Return header from blue arm, which contains JD and BERV
+    return header_blue, spectrum_data
+    
+    
+    
 def read_bias(filename):
     bias = np.zeros((70,3))
     current_order = None  # Track the current order
@@ -370,6 +478,12 @@ def extract_mjd_from_header(header, instrument=None):
                 # Convert BJD to MJD using astropy Time
                 time = Time(bjd_val, format='jd', scale='utc')
                 return time.mjd
+        if "jd" in instrument.header_keywords:
+            jd_key = instrument.header_keywords["jd"]
+            if jd_key in header:
+                jd_val = header[jd_key]
+                time = Time(jd_val, format='jd', scale='utc')
+                return time.mjd
     # Default: APF style (text header)
     for line in header:
         if line.startswith("# THEMIDPT"):
@@ -425,41 +539,44 @@ def cross_correlate_stellar_mask(obs_wavelength, obs_flux, mask_wavelength, mask
         # Compute weighted correlation using mask line strengths
         cross_corr[i] = np.sum(matched_flux * mask_strength[valid_indices])
 
-    # Convert log-wavelength shifts to velocity shifts (Doppler formula)
-    velocity_shifts = 299792.458 * (10**log_shifts - 1)
+    if np.max(cross_corr) < 0:
+        return 0, 0, 0, 0
+    else:
+        # Convert log-wavelength shifts to velocity shifts (Doppler formula)
+        velocity_shifts = 299792.458 * (10**log_shifts - 1)
 
-    # **Identify the peak and fit only a small range around it**
-    peak_index = np.argmax(cross_corr)
-    fit_indices = np.arange(max(0, peak_index - fit_width), min(len(cross_corr), peak_index + fit_width + 1))
+        # **Identify the peak and fit only a small range around it**
+        peak_index = np.argmax(cross_corr)
+        fit_indices = np.arange(max(0, peak_index - fit_width), min(len(cross_corr), peak_index + fit_width + 1))
 
-    if len(fit_indices) < 3:  # Ensure we have enough points for fitting
-        return velocity_shifts[peak_index], velocity_shifts, cross_corr
+        if len(fit_indices) < 3:  # Ensure we have enough points for fitting
+            return velocity_shifts[peak_index], velocity_shifts, cross_corr
 
-    # Define Gaussian function
-    def gaussian(x, a, mu, sigma):
-        return a * np.exp(-0.5 * ((x - mu) / sigma) ** 2)
+        # Define Gaussian function
+        def gaussian(x, a, mu, sigma):
+            return a * np.exp(-0.5 * ((x - mu) / sigma) ** 2)
 
-    try:
-        popt, pcov = curve_fit(
-            gaussian, velocity_shifts[fit_indices], cross_corr[fit_indices],
-            p0=[np.max(cross_corr), velocity_shifts[peak_index], 10],
-            bounds=((0,-np.inf,0), (np.inf,np.inf,np.inf))
-        )
-        perr = np.sqrt(np.diag(pcov))  # Standard deiation
-        best_velocity_shift = popt[1]  # Gaussian center
-        #best_velocity_err = popt[2]
-        best_velocity_err = perr[1]
-    except RuntimeError:
-        best_velocity_shift = velocity_shifts[peak_index]  # Fallback to discrete peak
-        best_velocity_err = 1e30
+        try:
+            popt, pcov = curve_fit(
+                gaussian, velocity_shifts[fit_indices], cross_corr[fit_indices],
+                p0=[np.max(cross_corr), velocity_shifts[peak_index], 10],
+                bounds=((0,-np.inf,0), (np.inf,np.inf,np.inf))
+            )
+            perr = np.sqrt(np.diag(pcov))  # Standard deiation
+            best_velocity_shift = popt[1]  # Gaussian center
+            #best_velocity_err = popt[2]
+            best_velocity_err = perr[1]
+        except RuntimeError:
+            best_velocity_shift = velocity_shifts[peak_index]  # Fallback to discrete peak
+            best_velocity_err = 1e30
 
-    if 10 < 0:
-        print(best_velocity_shift, best_velocity_err, popt[2])
-        plt.plot(velocity_shifts, cross_corr)
-        plt.plot(velocity_shifts, gaussian(velocity_shifts, popt[0], popt[1], popt[2]))
-        plt.show()
+        if 10 < 0:
+            print(best_velocity_shift, best_velocity_err, popt[2])
+            plt.plot(velocity_shifts, cross_corr)
+            plt.plot(velocity_shifts, gaussian(velocity_shifts, popt[0], popt[1], popt[2]))
+            plt.show()
 
-    return best_velocity_shift, best_velocity_err, velocity_shifts, cross_corr
+        return best_velocity_shift, best_velocity_err, velocity_shifts, cross_corr
     
 
 
@@ -600,6 +717,8 @@ def process_spectrum(spectrum_file, spectral_type="G2", args=None, instrument=No
     # Read spectrum and stellar mask
     if instrument.file_format == "fits" and instrument.name == "GHOST":
         header, spectrum_data = read_spectrum_ghost(spectrum_file)
+    elif instrument.file_format == "hd5" and instrument.name == "MAROON-X":
+        header, spectrum_data = read_spectrum_maroonx(spectrum_file)
     else:
         header, spectrum_data = read_spectrum(spectrum_file)
     mask_data = read_stellar_mask(spectral_type=spectral_type, directory=instrument.mask_directory)
