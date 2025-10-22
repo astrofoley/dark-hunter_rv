@@ -565,16 +565,20 @@ def cross_correlate_stellar_mask(obs_wavelength, obs_flux, mask_wavelength, mask
             perr = np.sqrt(np.diag(pcov))  # Standard deiation
             best_velocity_shift = popt[1]  # Gaussian center
             #best_velocity_err = popt[2]
-            best_velocity_err = perr[1]
+            if (popt[2] > 0.8) & (popt[2] < 30) & (popt[0] > 0.5):
+                best_velocity_err = perr[1]
+            else:
+                best_velocity_err = 1e30
+            if 10 < 0:
+                print(best_velocity_shift, best_velocity_err, popt[2])
+                plt.plot(velocity_shifts, cross_corr)
+                plt.plot(velocity_shifts, gaussian(velocity_shifts, popt[0], popt[1], popt[2]))
+                plt.show()
         except RuntimeError:
+            print("Error: Gaussian fit failed.")
             best_velocity_shift = velocity_shifts[peak_index]  # Fallback to discrete peak
             best_velocity_err = 1e30
 
-        if 10 < 0:
-            print(best_velocity_shift, best_velocity_err, popt[2])
-            plt.plot(velocity_shifts, cross_corr)
-            plt.plot(velocity_shifts, gaussian(velocity_shifts, popt[0], popt[1], popt[2]))
-            plt.show()
 
         return best_velocity_shift, best_velocity_err, velocity_shifts, cross_corr
     
@@ -827,9 +831,10 @@ def process_spectrum(spectrum_file, spectral_type="G2", args=None, instrument=No
         for key in keys_to_remove:
             rv_results.pop(key, None)
 
+    order_rv_errs[order_rv_errs > 1e3] = np.inf
     mean_rv = np.average(order_rvs, weights=1/order_rv_errs**2)
     mean_rv_err = np.sqrt(1/np.sum(1/order_rv_errs**2))
-    rms_rv = np.sum((order_rvs - mean_rv)**2 / order_rv_errs**2) / np.sum(1/order_rv_errs**2)
+    rms_rv = np.sqrt(np.sum((order_rvs - mean_rv)**2 / order_rv_errs**2) / np.sum(1/order_rv_errs**2))
 
     if args.show_plots:
         plt.figure(figsize=(8, 5))
