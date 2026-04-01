@@ -76,7 +76,7 @@ def overwrite(source_id, date_modified, flag):
 
     for path_to_output in paths_to_output:
         if os.path.exists(path_to_output):
-            print(f"File last edited: {date_modified.strftime("%Y-%m-%d %H:%M:%S.%f")}")
+            print(f"File last edited: {date_modified.strftime('%Y-%m-%d %H:%M:%S.%f')}")
             dir_modified = os.path.getmtime(path_to_output)
             dir_modified = datetime.fromtimestamp(dir_modified)
             if dir_modified < date_modified or flag is True:

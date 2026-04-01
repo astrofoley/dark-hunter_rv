@@ -1,92 +1,133 @@
+"""Aggregate per-order RV files and write bias_statistics.txt for debiassing."""
+
+import argparse
+import logging
 import os
+
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 
-def read_data(directory):
-    data = []
-    for file in os.listdir(directory):
-        if file.endswith("_orders.txt"):
-            filepath = os.path.join(directory, file)
-            star_name = "_".join(file.split("_")[:3])  # Extract star name
-            epoch = int(file.split("epoch_")[1].split("_")[0])  # Extract epoch number
-            df = pd.read_csv(filepath, sep='\s+', comment='#',
-                             names=["Order", "RV", "RV_Error"])
-            df["Order"] = pd.to_numeric(df["Order"], errors="coerce")
-            df["RV"] = pd.to_numeric(df["RV"], errors="coerce")
-            df["RV_Error"] = pd.to_numeric(df["RV_Error"], errors="coerce")
-            df["Star"] = star_name
-            df["Epoch"] = epoch
-            data.append(df)
-    return pd.concat(data, ignore_index=True)
+logger = logging.getLogger(__name__)
 
-def compute_bias(df, sigma=2.2, max_iter=20, tol=1e-3):
-    biases = []
-    for (star, epoch), group in df.groupby(["Star", "Epoch"]):
-        prev_len = len(group)
-        
+
+def check_suborder(filepath: str) -> bool:
+    if not filepath.endswith("_orders.txt") or "epoch" not in filepath:
+        return False
+    with open(filepath, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if line.startswith("#") and "Suborder" in line:
+                return True
+    return False
+
+
+def read_data(directory: str):
+    first_suborder = False
+    for fn in os.listdir(directory):
+        fp = os.path.join(directory, fn)
+        if os.path.isfile(fp) and fn.endswith("_orders.txt") and "epoch" in fn:
+            if check_suborder(fp):
+                first_suborder = True
+                break
+
+    rows = []
+    for fn in os.listdir(directory):
+        if not fn.endswith("_orders.txt") or "epoch" not in fn:
+            continue
+        fp = os.path.join(directory, fn)
+        sub_here = check_suborder(fp)
+        star_name = "_".join(fn.split("_")[:3])
+        try:
+            epoch = int(fn.split("epoch_")[1].split("_")[0])
+        except (IndexError, ValueError):
+            logger.warning("skip %s (epoch parse)", fn)
+            continue
+
+        if not sub_here and first_suborder:
+            continue
+        if sub_here or first_suborder:
+            df = pd.read_csv(fp, sep=r"\s+", comment="#", names=["Order", "Suborder", "RV", "RV_Error"])
+            df["Suborder"] = pd.to_numeric(df["Suborder"], errors="coerce").fillna(0).astype(int)
+        else:
+            df = pd.read_csv(fp, sep=r"\s+", comment="#", names=["Order", "RV", "RV_Error"])
+            df["Suborder"] = 0
+
+        df["Star"] = star_name
+        df["Epoch"] = epoch
+        rows.append(df)
+
+    if not rows:
+        return pd.DataFrame(), False
+    return pd.concat(rows, ignore_index=True), first_suborder
+
+
+def compute_bias(df: pd.DataFrame, sigma: float = 2.2, max_iter: int = 20, tol: float = 1e-3):
+    if df.empty:
+        return df
+    out = []
+    for (_, _), group in df.groupby(["Star", "Epoch"]):
+        g = group.copy()
+        prev = len(g)
         for _ in range(max_iter):
-            median_rv = np.median(group["RV"])
-            std_rv = np.std(group["RV"])
-            
-            # Sigma clipping: Remove outliers beyond sigma threshold
-            filtered_group = group[np.abs(group["RV"] - median_rv) <= sigma * std_rv]
-            
-            if len(filtered_group) == prev_len or abs(len(filtered_group) - prev_len) / prev_len < tol:
-                break  # Convergence reached
-            
-            prev_len = len(filtered_group)
-            group = filtered_group  # Update the group for the next iteration
-        
-        if len(group) > 0:
-            weights = 1 / group["RV_Error"]**2
-            weighted_mean_rv = np.sum(group["RV"] * weights) / np.sum(weights)
-            group["Bias"] = group["RV"] - weighted_mean_rv
-            biases.append(group)
+            med = np.median(g["RV"])
+            std = np.std(g["RV"]) or 1e-9
+            filt = g[np.abs(g["RV"] - med) <= sigma * std]
+            if len(filt) == prev or abs(len(filt) - prev) / prev < tol:
+                g = filt
+                break
+            prev = len(filt)
+            g = filt
+        if len(g) == 0:
+            continue
+        w = 1.0 / (g["RV_Error"] ** 2 + 1e-18)
+        wmean = np.sum(g["RV"] * w) / np.sum(w)
+        g = g.copy()
+        g["Bias"] = g["RV"] - wmean
+        out.append(g)
+    return pd.concat(out, ignore_index=True) if out else pd.DataFrame(columns=df.columns)
 
-    return pd.concat(biases, ignore_index=True) if biases else pd.DataFrame(columns=df.columns)
 
-def compute_statistics(df, groupby_cols):
-    stats = df.groupby(groupby_cols).apply(lambda g: pd.Series({
-        "Bias_Mean": np.average(g["Bias"], weights=1/g["RV_Error"]**2),
-        "Bias_Error": np.sqrt(1 / np.sum(1/g["RV_Error"]**2)),
-        "Bias_RMS": np.sum((g["Bias"] - np.average(g["Bias"], weights=1/g["RV_Error"]**2))**2 / g["RV_Error"]**2) / np.sum(1/g["RV_Error"]**2)
+def compute_statistics(df: pd.DataFrame, groupby_cols: list):
+    def _agg(g):
+        w = 1.0 / (g["RV_Error"] ** 2 + 1e-18)
+        bm = np.average(g["Bias"], weights=w)
+        be = np.sqrt(1.0 / np.sum(w))
+        br = np.sum((g["Bias"] - bm) ** 2 * w) / np.sum(w)
+        return pd.Series({"Bias_Mean": bm, "Bias_Error": be, "Bias_RMS": np.sqrt(max(br, 0.0))})
 
-    })).reset_index()
-    return stats
+    return df.groupby(groupby_cols).apply(_agg).reset_index()
 
-def plot_bias(df, stats, title):
-    plt.figure(figsize=(10, 6))
-    for star, group in df.groupby("Star"):
-        plt.scatter(group["Order"], group["Bias"], label=f"{star}", alpha=0.5)
-    plt.errorbar(stats["Order"], stats["Bias_Mean"],
-                 yerr=stats["Bias_Error"], fmt='o', capsize=5,
-                 color='black', label='Mean Bias Error')
-    plt.errorbar(stats["Order"], stats["Bias_Mean"],
-                 yerr=stats["Bias_RMS"], fmt='o', capsize=5,
-                 color='red', label='RMS Bias Error')
-    plt.axhline(0, color='gray', linestyle='--')
-    plt.xlabel("Order")
-    plt.ylabel("Bias (km/s)")
-    plt.legend()
-    plt.title(title)
-    plt.show()
+
+def write_bias_file(stats: pd.DataFrame, outpath: str) -> None:
+    stats = stats.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    with open(outpath, "w", encoding="utf-8") as fh:
+        fh.write("# order bias_dv bias_err_stat bias_rms_stat\n")
+        for _, row in stats.iterrows():
+            o = int(row["Order"])
+            fh.write(
+                f"{o} {row['Bias_Mean']:.8f} {row['Bias_Error']:.8f} {row['Bias_RMS']:.8f}\n"
+            )
+    logger.info("Wrote %s", outpath)
+
 
 def main():
-    directory = "output/"
-    df = read_data(directory)
-    df_filtered = compute_bias(df)
-    
-    all_stats = compute_statistics(df_filtered, ["Order"])
-    per_star_stats = compute_statistics(df_filtered, ["Star", "Order"])
-    
-    plot_bias(df_filtered, all_stats, "Radial Velocity Bias Across All Data")
-    
-    for star, group in df_filtered.groupby("Star"):
-        star_stats = per_star_stats[per_star_stats["Star"] == star]
-        plot_bias(group, star_stats, f"Radial Velocity Bias for {star}")
-    
-    all_stats.to_csv("bias_statistics.txt", index=False, sep=" ")
+    parser = argparse.ArgumentParser(description="Build bias_statistics.txt from order RV files.")
+    parser.add_argument("--input-dir", default="output")
+    parser.add_argument("--output", default="bias_statistics.txt")
+    parser.add_argument("--log-level", default="INFO")
+    args = parser.parse_args()
+    logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
+
+    df, sub = read_data(args.input_dir)
+    if df.empty:
+        logger.error("No order files in %s", args.input_dir)
+        return
+    filt = compute_bias(df)
+    if filt.empty:
+        logger.error("No bias rows after filtering")
+        return
+    stats = compute_statistics(filt, ["Order"])
+    write_bias_file(stats, args.output)
+
 
 if __name__ == "__main__":
     main()

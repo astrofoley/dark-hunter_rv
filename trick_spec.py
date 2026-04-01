@@ -262,15 +262,13 @@ def parse_ascii_to_fits(input_file, **kwargs):
         if current_order is not None:
             try:
                 wave, flux = map(float, line.split(','))
-                eflux = np.sqrt(abs(flux))  # Poisson error
-                flux = np.random.normal(loc=0.0, scale=1e-1, size=1)+1
-                eflux = 1e10
+                eflux = np.sqrt(abs(flux))
                 orders[current_order].append((wave, flux, eflux))
             except ValueError:
                 continue
     
-    if kwargs["norm"] | (kwargs["bin_size"] != None):
-        for o in range(len(orders)):
+    if kwargs["norm"] or (kwargs.get("bin_size") is not None):
+        for o in sorted(orders.keys()):
             wave = []
             flux = []
             eflux = []

@@ -267,8 +267,8 @@ def parse_ascii_to_fits(input_file, **kwargs):
             except ValueError:
                 continue
     
-    if kwargs["norm"] | (kwargs["bin_size"] != None):
-        for o in range(len(orders)):
+    if kwargs["norm"] or (kwargs.get("bin_size") is not None):
+        for o in sorted(orders.keys()):
             wave = []
             flux = []
             eflux = []
@@ -323,7 +323,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("input_file", help="Path to the input ASCII file")  # Define as a positional argument
     parser.add_argument('--norm', '-n', help='Normalize the spectrum', action='store_true')
-    parser.add_argument('--bin_size', '-b', help='Factor for rebinning data', type=int, default=2)
+    parser.add_argument('--bin_size', '-b', help='Factor for rebinning data', type=int, default=None)
     parser.add_argument('--debug', '-d', help='Debug mode', action='store_true')
 
     args = parser.parse_args()
