@@ -1,5 +1,6 @@
 # io_utils.py
 import os
+import re
 import logging
 import numpy as np
 import pandas as pd
@@ -131,6 +132,80 @@ def read_bias(filename):
         logging.warning(f"Failed to read bias file: {e}. Using zeros.")
     return bias
 
+
+def write_method_rv_offsets(
+    path: str | Path,
+    rows: list[dict],
+    comment_lines: list[str] | None = None,
+) -> None:
+    """
+    Write global method RV offsets (one row per instrument).
+
+    Each row dict must have keys: instrument, offset_template_fft_kms,
+    offset_strong_lines_kms, n_exposures_joint, estimator.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for ln in comment_lines or []:
+            f.write(ln.rstrip() + "\n")
+        for r in rows:
+            f.write(
+                f"{r['instrument']} {float(r['offset_template_fft_kms']):.8f} "
+                f"{float(r['offset_strong_lines_kms']):.8f} {int(r['n_exposures_joint'])} "
+                f"{r['estimator']}\n"
+            )
+
+
+def read_method_rv_offsets(
+    filename: str | Path | None,
+    *,
+    warn_if_missing: bool = True,
+) -> dict[str, dict]:
+    """
+    Read offsets written by :func:`write_method_rv_offsets` / ``validation.compute_method_rv_offsets``.
+
+    Returns ``{instrument: {offset_template_fft_kms, offset_strong_lines_kms,
+    n_exposures_joint, estimator}}``. Missing file → empty dict.
+    """
+    if not filename or not os.path.exists(filename):
+        if warn_if_missing and filename:
+            logging.warning("Method RV offsets file %s not found; no method offsets applied.", filename)
+        return {}
+    out: dict[str, dict] = {}
+    try:
+        df = pd.read_csv(
+            filename,
+            sep=r"\s+",
+            comment="#",
+            header=None,
+            names=[
+                "instrument",
+                "offset_template_fft_kms",
+                "offset_strong_lines_kms",
+                "n_exposures_joint",
+                "estimator",
+            ],
+        )
+        for _, row in df.iterrows():
+            try:
+                inst = str(row["instrument"]).strip()
+                if not inst:
+                    continue
+                out[inst] = {
+                    "offset_template_fft_kms": float(row["offset_template_fft_kms"]),
+                    "offset_strong_lines_kms": float(row["offset_strong_lines_kms"]),
+                    "n_exposures_joint": int(row["n_exposures_joint"]),
+                    "estimator": str(row["estimator"]).strip(),
+                }
+            except (ValueError, TypeError, KeyError):
+                continue
+    except Exception as e:
+        logging.warning("Failed to read method RV offsets file: %s. Using empty offsets.", e)
+        return {}
+    return out
+
+
 def write_order_results(order_data, input_filename):
     config.OUTPUT_DIR.mkdir(exist_ok=True)
     base = Path(input_filename).stem
@@ -169,18 +244,79 @@ def write_summary(processed_data):
             f.write(line + "\n")
     logging.info(f"Summary written to {outfile}")
 
+
+def _parse_star_summary_pipeline_lines(text: str) -> dict[str, str]:
+    """Basename -> full pipeline data line (no newline) from an existing star summary."""
+    if "[PIPELINE RESULTS]" not in text:
+        return {}
+    rest = text.split("[PIPELINE RESULTS]", 1)[1]
+    if "\n[" in rest:
+        rest = rest.split("\n[", 1)[0]
+    out: dict[str, str] = {}
+    for raw in rest.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        basename = Path(parts[0]).name
+        out[basename] = line
+    return out
+
+
+def _format_star_summary_pipeline_line(res: dict) -> str:
+    fn = Path(str(res["file"])).name
+    mjd, rv, e_rv, rms = res["mjd"], res["rv"], res["rv_err"], res["rv_rms"]
+    fb = res["fallback"]
+
+    def _num(x) -> str:
+        try:
+            xf = float(x)
+            return f"{xf:.8f}" if np.isfinite(xf) else "nan"
+        except (TypeError, ValueError):
+            return "nan"
+
+    return f"{fn} {_num(mjd)} {_num(rv)} {_num(e_rv)} {_num(rms)} {fb}"
+
+
+def _pipeline_line_sort_key(basename: str) -> tuple:
+    m = re.search(r"epoch_(\d+)", basename, re.I)
+    if m:
+        return (0, int(m.group(1)), basename)
+    return (1, basename, basename)
+
+
 def write_star_summary(obj_id, gaia_data, pipeline_results):
+    """
+    Write Gaia DR3 star summary. Merges [PIPELINE RESULTS] with any existing file on disk
+    (basename-keyed) so batch diagnose runs that invoke the pipeline once per spectrum do not
+    overwrite previous epochs.
+    """
     config.OUTPUT_DIR.mkdir(exist_ok=True)
     outfile = config.OUTPUT_DIR / f"Gaia_DR3_{obj_id}_summary.txt"
-    
+
+    merged: dict[str, str] = {}
+    if outfile.exists():
+        try:
+            merged = _parse_star_summary_pipeline_lines(outfile.read_text())
+        except OSError:
+            merged = {}
+
+    for res in pipeline_results:
+        bn = Path(str(res["file"])).name
+        merged[bn] = _format_star_summary_pipeline_line(res)
+
+    ordered = sorted(merged.keys(), key=_pipeline_line_sort_key)
+
     with open(outfile, "w") as f:
         f.write(f"### STAR SUMMARY: {obj_id} ###\n\n")
-        
+
         # 1. Metadata from Gaia (Strict Key: Value format)
-        if gaia_data and gaia_data.get('metadata'):
+        if gaia_data and gaia_data.get("metadata"):
             f.write("[GAIA METADATA]\n")
-            m = gaia_data['metadata']
-            
+            m = gaia_data["metadata"]
+
             for key, val in m.items():
                 if isinstance(val, float):
                     if np.isfinite(val):
@@ -189,23 +325,23 @@ def write_star_summary(obj_id, gaia_data, pipeline_results):
                         f.write(f"{key}: NaN\n")
                 else:
                     f.write(f"{key}: {val}\n")
-                    
+
         else:
             f.write("[GAIA METADATA]\nNot Found or Query Failed.\n")
 
         # 2. External Data
         f.write("\n[EXTERNAL RV DATA]\n")
         f.write("# Telescope | MJD | RV (km/s) | Err (km/s) | Flag/ID\n")
-        if gaia_data and gaia_data.get('external_rvs'):
-            for ext in gaia_data['external_rvs']:
+        if gaia_data and gaia_data.get("external_rvs"):
+            for ext in gaia_data["external_rvs"]:
                 f.write(f"{ext['telescope']} {ext['mjd']:.5f} {ext['rv']:.3f} {ext['rv_err']:.3f} {ext['flag']}\n")
         else:
             f.write("# No external data found.\n")
 
-        # 3. Pipeline Data
+        # 3. Pipeline Data (merged across per-spectrum pipeline runs)
         f.write("\n[PIPELINE RESULTS]\n")
         f.write("# File | MJD | RV (km/s) | Err (km/s) | RMS | Fallback?\n")
-        for res in pipeline_results:
-             f.write(f"{res['file']} {res['mjd']:.8f} {res['rv']:.8f} {res['rv_err']:.8f} {res['rv_rms']:.8f} {res['fallback']}\n")
-             
-    logging.info(f"Detailed star summary written to {outfile}")
+        for bn in ordered:
+            f.write(merged[bn] + "\n")
+
+    logging.info(f"Detailed star summary written to {outfile} ({len(ordered)} pipeline rows)")
