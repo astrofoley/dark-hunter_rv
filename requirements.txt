@@ -1,4 +1,5 @@
-numpy>=1.26
+# Matplotlib may fail on NumPy 2.x with ImportError (multiarray); pin or upgrade matplotlib.
+numpy>=1.26,<2.0
 scipy>=1.11
 astropy>=6.0
 pandas>=2.1
@@ -6,3 +7,4 @@ matplotlib>=3.8
 requests>=2.31
 astroquery>=0.4
 pytest>=8.0
+PyYAML>=6.0

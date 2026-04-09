@@ -10,6 +10,16 @@ This repo contains a **robust, echelle-aware RV measurement pipeline** targeting
 - Optional **order bias** correction via `bias_statistics.txt`.
 - **Diagnostic plots** and **structured logging**.
 - **Unit + smoke tests** (`pytest`).
+- **Calibration workflow**: mask-only bias training, `bias_statistics.txt`, `method_rv_offsets.txt`, and a production batch driver (see **Documentation** below).
+
+### Documentation
+
+| Doc | What it covers |
+|-----|----------------|
+| [docs/operations.md](docs/operations.md) | One-command calibration, production batch, env vars, cron, `--mask-only` / `--update` |
+| [docs/rv_methods_evaluation.md](docs/rv_methods_evaluation.md) | Method validity, adopted-RV cascade, validation reports |
+| [docs/contributing.md](docs/contributing.md) | Doc map, pre-PR checklist, **git commands to open a PR** |
+| [docs/validation_playbook.md](docs/validation_playbook.md) | Validation campaigns |
 
 ### Quick start
 
@@ -35,8 +45,13 @@ Useful flags:
 - `--plots` and `--plot-dir <dir>`
 - `--continuum-mode spline|blaze`
 - `--subchunks N` (split each order into N pixel chunks)
-- `--run-all-methods` (emit diagnostics for all methods)
+- **Default:** multi-method diagnostics (mask + template + strong lines) and **cascade** adopted RV (mask → template → strong; see `docs/rv_methods_evaluation.md`); `--no-run-all-methods` for legacy behavior
+- `--mask-only` — stellar mask chunk RVs only (bias training; use with `--no-bias`); see `docs/operations.md`
+- `--method-offsets-file` — global template/strong offsets vs mask (`method_rv_offsets.txt`)
+- `--update` / `--force` — skip spectra whose diagnostics CSV is up to date (cron-friendly)
 - `--max-chunk-err <km/s>` (skip chunks with invalid/huge errors)
+
+**Batch workflows:** `python -m validation.run_calibration_setup` (bias + offsets + manifest) and `python -m validation.run_production_remaining` (process remaining spectra). Details in `docs/operations.md`.
 
 Outputs:
 
@@ -46,13 +61,20 @@ Outputs:
 - `output/<object>_summary.txt` (per-file RV summary)
 - `plots/*` (if `--plots`)
 
-### Bias estimation
+### Bias and method offsets
 
-After you have many `output/*_orders.txt` files, build `bias_statistics.txt`:
+**Recommended (current chunk `*_orders.txt` format):** use the automated calibration driver or `build_bias_set`:
 
 ```bash
-python3 rv_bias.py --input-dir output --output bias_statistics.txt
+python -m validation.run_calibration_setup --bias-list … --offset-list … --instrument APF
+# or, manually:
+python -m validation.build_bias_set --input-dir output --out-dir calibration/bias_build
+# then copy calibration/bias_build/bias_statistics.txt to the repo root (APF default path)
 ```
+
+**Legacy:** `python3 rv_bias.py` expects an older `*_orders.txt` layout (epoch/suborder columns). Prefer `build_bias_set` for outputs from the current pipeline.
+
+**Method offsets** (template/strong vs mask): `python -m validation.compute_method_rv_offsets` (see `docs/operations.md`). Installed as `method_rv_offsets.txt` at repo root or via `DARKHUNTER_METHOD_OFFSETS_FILE`.
 
 ### Spectroscopic binary RV fitting (SB1, circular)
 

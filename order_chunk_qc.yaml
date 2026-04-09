@@ -1,0 +1,17 @@
+global:
+  max_chunk_err_kms: 50.0
+  min_mask_line_count: 8
+  max_telluric_fraction: 0.25
+  max_ccf_asymmetry: 0.35
+  min_ccf_peak: 0.02
+  min_ccf_peak_snr: 2.75
+  max_fft_ccf_flat_rss_ratio: 0.88
+instruments:
+  APF:
+    max_chunk_err_kms: 25.0
+    min_mask_line_count: 8
+    max_telluric_fraction: 0.22
+    max_ccf_asymmetry: 0.55
+    min_ccf_peak: 0.03
+    min_ccf_peak_snr: 2.45
+    max_fft_ccf_flat_rss_ratio: 0.88

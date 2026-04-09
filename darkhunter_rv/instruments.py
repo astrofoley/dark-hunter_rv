@@ -16,6 +16,8 @@ class InstrumentProfile:
     bad_orders: List[int]
     mask_directory: str
     header_keywords: Dict[str, str] = field(default_factory=dict)
+    # λ/Δλ for simple Gaussian LSF when plotting template–spectrum FFT comparison
+    resolving_power: float = 60_000.0
 
 
 INSTRUMENTS = {
@@ -27,6 +29,7 @@ INSTRUMENTS = {
         bad_orders=[0, 1, 2, 53, 57, 58, 59, 60, 63, 64, 65],
         mask_directory=str(config.MASK_DIRECTORY),
         header_keywords={"mjd": "# THEMIDPT"},
+        resolving_power=70_000.0,
     ),
     "GHOST": InstrumentProfile(
         name="GHOST",
