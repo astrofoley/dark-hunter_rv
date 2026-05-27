@@ -1,0 +1,192 @@
+"""Tests for fit_apf_rv_keplerian summary parsing (no network)."""
+
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+import fit_apf_rv_keplerian as fitmod
+
+
+def _write_star_summary(path: Path, *, period: float = 12.5, ecc: float = 0.2) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "### STAR SUMMARY: 958479989998172288 ###\n\n"
+        "[GAIA METADATA]\n"
+        "Source_ID: 958479989998172288\n"
+        "RA: 180.5\n"
+        "Dec: -45.25\n"
+        "NSS_Solution_Type: Orbital\n"
+        f"Period: {period:.6f}\n"
+        f"Eccentricity: {ecc:.6f}\n"
+        "\n[EXTERNAL RV DATA]\n"
+        "# No external data found.\n"
+        "\n[PIPELINE RESULTS]\n"
+        "# File | MJD | RV (km/s) | Err (km/s) | RMS | Fallback?\n"
+        "Gaia_DR3_958479989998172288_epoch_1.txt 60000.1 -10.5 0.02 0.4 False\n"
+        "Gaia_DR3_958479989998172288_epoch_2.txt 60012.3 -11.2 0.02 0.5 False\n"
+        "Gaia_DR3_958479989998172288_epoch_3.txt 60024.0 -9.8 0.02 0.4 False\n"
+        "Gaia_DR3_958479989998172288_epoch_4.txt 60036.2 -10.1 0.02 0.45 False\n"
+        "Gaia_DR3_958479989998172288_epoch_5.txt 60048.5 -11.0 0.02 0.5 False\n"
+        "Gaia_DR3_958479989998172288_epoch_6.txt 60060.0 -10.3 0.02 0.42 False\n"
+        "Gaia_DR3_958479989998172288_epoch_7.txt 60072.4 -10.8 0.02 0.44 False\n"
+    )
+
+
+def test_parse_summary_pipeline_block(tmp_path: Path) -> None:
+    summ = tmp_path / "Gaia_DR3_958479989998172288" / "Gaia_DR3_958479989998172288_summary.txt"
+    _write_star_summary(summ)
+    pts = fitmod.parse_summary(summ)
+    assert len(pts) == 7
+    assert pts[0].mjd == pytest.approx(60000.1)
+    assert pts[0].rv == pytest.approx(-10.5)
+
+
+def test_parse_object_id_nested_path(tmp_path: Path) -> None:
+    summ = tmp_path / "Gaia_DR3_958479989998172288" / "Gaia_DR3_958479989998172288_summary.txt"
+    _write_star_summary(summ)
+    assert fitmod.parse_object_id_from_summary(summ) == "958479989998172288"
+
+
+def test_load_nss_priors_from_summary_no_network(tmp_path: Path) -> None:
+    summ = tmp_path / "Gaia_DR3_958479989998172288" / "Gaia_DR3_958479989998172288_summary.txt"
+    _write_star_summary(summ, period=45.0, ecc=0.15)
+    priors = fitmod.load_nss_priors_from_summary(summ)
+    assert priors is not None
+    assert priors["period_days"] == pytest.approx(45.0)
+    assert priors["eccentricity"] == pytest.approx(0.15)
+
+
+def test_discover_summary_files_nested_only(tmp_path: Path) -> None:
+    _write_star_summary(tmp_path / "Gaia_DR3_111" / "Gaia_DR3_111_summary.txt")
+    found = fitmod.discover_summary_files(tmp_path)
+    assert len(found) == 1
+    assert found[0].name == "Gaia_DR3_111_summary.txt"
+
+
+def test_discover_prefers_flat_summary_over_nested_stub(tmp_path: Path) -> None:
+    sid = "1702370142434513152"
+    nested = tmp_path / f"Gaia_DR3_{sid}" / f"Gaia_DR3_{sid}_summary.txt"
+    flat = tmp_path / f"Gaia_DR3_{sid}_summary.txt"
+    nested.parent.mkdir(parents=True)
+    nested.write_text(
+        "[GAIA METADATA]\nSource_ID: 1702370142434513152\nRA: 1.0\nDec: 2.0\n"
+        "\n[PIPELINE RESULTS]\n# hdr\n"
+        + "\n".join(
+            f"Gaia_DR3_{sid}_epoch_{i}.txt {60000+i} -1.0 0.1 0.2 False" for i in range(1, 4)
+        )
+        + "\n"
+    )
+    flat.write_text(
+        "[GAIA METADATA]\nSource_ID: 1702370142434513152\nRA: 1.0\nDec: 2.0\n"
+        "\n[PIPELINE RESULTS]\n# hdr\n"
+        + "\n".join(
+            f"Gaia_DR3_{sid}_epoch_{i}.txt {60000+i} -1.0 0.1 0.2 False" for i in range(1, 21)
+        )
+        + "\n"
+    )
+    found = fitmod.discover_summary_files(tmp_path)
+    assert len(found) == 1
+    assert found[0].resolve() == flat.resolve()
+    assert fitmod.count_pipeline_rows(found[0]) == 20
+
+
+def test_discover_prefers_gaia_dr3_name_over_legacy_numeric(tmp_path: Path) -> None:
+    sid = "77413727493690112"
+    legacy = tmp_path / f"{sid}_summary.txt"
+    gaia = tmp_path / f"Gaia_DR3_{sid}_summary.txt"
+    body = (
+        "[GAIA METADATA]\nSource_ID: 77413727493690112\nRA: 1.0\nDec: 2.0\n"
+        "\n[PIPELINE RESULTS]\n# hdr\n"
+        + "\n".join(
+            f"Gaia_DR3_{sid}_epoch_{i}.txt {60000+i} -1.0 0.1 0.2 False" for i in range(1, 11)
+        )
+        + "\n"
+    )
+    legacy.write_text(body)
+    gaia.write_text(body)
+    found = fitmod.discover_summary_files(tmp_path)
+    assert len(found) == 1
+    assert found[0].resolve() == gaia.resolve()
+
+
+def test_parse_summary_counts_nan_rv_epochs(tmp_path: Path) -> None:
+    flat = tmp_path / "Gaia_DR3_1702370142434513152_summary.txt"
+    flat.write_text(
+        "[PIPELINE RESULTS]\n# File | MJD | RV | Err | RMS\n"
+        "Gaia_DR3_1702370142434513152_epoch_1.txt 60613.38 -9.74 0.97 0.90 False\n"
+        "Gaia_DR3_1702370142434513152_epoch_2.txt 60643.39 nan nan 0.94 False\n"
+        "Gaia_DR3_1702370142434513152_epoch_3.txt 60654.21 nan nan 1.22 False\n"
+        "Gaia_DR3_1702370142434513152_epoch_4.txt 60663.20 33.05 2.45 1.11 False\n"
+        "Gaia_DR3_1702370142434513152_epoch_5.txt 60685.55 14.99 2.45 1.53 False\n"
+        "Gaia_DR3_1702370142434513152_epoch_6.txt 60693.20 7.39 2.45 1.23 False\n"
+        "Gaia_DR3_1702370142434513152_epoch_7.txt 60702.20 -1.65 2.48 1.28 False\n"
+        "Gaia_DR3_1702370142434513152_epoch_8.txt 60716.36 -9.54 0.72 1.40 False\n"
+    )
+    pts = fitmod.parse_summary(flat)
+    assert len(pts) == 8
+    t = np.array([p.mjd for p in pts])
+    y = np.array([p.rv for p in pts])
+    ok = np.isfinite(t) & np.isfinite(y)
+    assert ok.sum() == 6
+
+
+def test_report_stem_uses_numeric_id(tmp_path: Path) -> None:
+    summ = tmp_path / "Gaia_DR3_958479989998172288" / "Gaia_DR3_958479989998172288_summary.txt"
+    _write_star_summary(summ)
+    assert fitmod.report_stem(summ, "958479989998172288") == "958479989998172288"
+
+
+def test_run_one_skips_all_nan_rv(tmp_path: Path) -> None:
+    summ = tmp_path / "Gaia_DR3_999" / "Gaia_DR3_999_summary.txt"
+    summ.parent.mkdir(parents=True)
+    summ.write_text(
+        "[GAIA METADATA]\nSource_ID: 999\nRA: 1.0\nDec: 2.0\n"
+        "\n[PIPELINE RESULTS]\n"
+        "# File | MJD | RV\n"
+        + "\n".join(f"ep_{i}.txt {60000+i} nan 0.1 0.2" for i in range(8))
+        + "\n"
+    )
+    out = tmp_path / "reports"
+    assert fitmod.run_one(summ, out, min_points=7, max_points=None, m1_msun=None,
+                          period_min=None, period_max=None, period_prior=None,
+                          period_prior_sigma=0.15, fix_period=None, fix_e=None,
+                          use_gaia_nss=False, gaia_cache_path=None,
+                          observability_cache_path=None, query_gaia_online=False) is None
+
+
+def test_fit_keplerian_clips_initial_guess() -> None:
+    t = np.linspace(60000.0, 60070.0, 8)
+    y = np.sin(2 * np.pi * t / 12.0) * 5.0
+    yerr = np.full_like(t, 0.2)
+    params, _ = fitmod.fit_keplerian(t, y, yerr, period_prior=1e6, period_prior_sigma=0.15)
+    assert np.all(np.isfinite(params))
+
+
+def test_load_nss_priors_includes_inclination(tmp_path: Path) -> None:
+    summ = tmp_path / "Gaia_DR3_1_summary.txt"
+    summ.write_text(
+        "[GAIA METADATA]\n"
+        "Source_ID: 1\n"
+        "RA: 1.0\n"
+        "Dec: 2.0\n"
+        "NSS_Solution_Type: Orbital\n"
+        "Period: 34.0\n"
+        "Eccentricity: 0.25\n"
+        "Inclination: 74.5\n"
+        "\n[PIPELINE RESULTS]\n"
+        "ep_1.txt 60000 -1 0.1 0.2 False\n"
+    )
+    priors = fitmod.load_nss_priors_from_summary(summ)
+    assert priors is not None
+    assert priors["inclination_deg"] == pytest.approx(74.5)
+
+
+def test_solve_m2_with_inclination_matches_edge_on() -> None:
+    # At i=90 deg, m2(with i) should match m2 sin(i).
+    f_mass = 0.12
+    m1 = 1.3
+    m2sini = fitmod.solve_m2sini_msun(f_mass, m1)
+    m2_i90 = fitmod.solve_m2_with_inclination_msun(f_mass, m1, 90.0)
+    assert m2_i90 is not None
+    assert m2_i90 == pytest.approx(m2sini, rel=1e-6)
