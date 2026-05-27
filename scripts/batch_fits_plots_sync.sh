@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Website integration batch:
 # 1) Keplerian fits
-# 2) Regenerate APF plots
+# 2) Generate APF RV plots from summaries (no pipeline rerun)
 # 3) Stage files into website contract:
 #    stars/Gaia_DR3_<id>/Gaia/{<id>_summary.txt,Plots/*,RV_Fit/*}
 # 4) Update tables/data.csv M2 column from fit JSON
@@ -17,7 +17,6 @@ set -euo pipefail
 
 REPO="${REPO:-/data2/darkhunter/dark-hunter_rv}"
 OUT="${OUT:-$REPO/output}"
-SPEC_ROOT="${SPEC_ROOT:-/data2/gaia_stars/apf_reductions}"
 WEB_ROOT="${WEB_ROOT:-/data2/gaia_stars/dark-hunter_rv-kirsty}"
 PY="${PY:-/home/marley/anaconda2/envs/gaia-env/bin/python}"
 REPORTS_DIR="${REPORTS_DIR:-$REPO/rv_fit_reports}"
@@ -67,7 +66,6 @@ echo "=== $(date -Is) batch start (pid $$) ==="
 echo "repo=$REPO out=$OUT web_root=$WEB_ROOT reports=$REPORTS_DIR dry_run=$DRY_RUN star_id=${STAR_ID:-ALL}"
 
 require_path "$OUT" dir
-require_path "$SPEC_ROOT" dir
 require_path "$WEB_ROOT" dir
 require_path "$WEBSITE_TABLES_DIR" dir
 require_path "$DATA_CSV" file
@@ -125,36 +123,17 @@ if [[ -n "$STAR_ID" ]]; then
 fi
 run_cmd "$PY" "${fit_args[@]}"
 
-echo "=== Pipeline plots (per-star output subdir) ==="
-n_specs=0
-for summ in "${SUMMARY_FILES[@]}"; do
-  gid=$(basename "$summ" _summary.txt | sed 's/^Gaia_DR3_//')
-  plot_dir="$OUT/Gaia_DR3_${gid}"
-  run_cmd mkdir -p "$plot_dir"
-  export DARKHUNTER_PLOT_DIR="$plot_dir"
-  while IFS= read -r bn; do
-    [[ -n "$bn" ]] || continue
-    spec=$(find "$SPEC_ROOT" -type f -name "$bn" -print -quit 2>/dev/null || true)
-    if [[ -z "$spec" ]]; then
-      echo "[WARN] spectrum not found: $bn (Gaia_DR3_${gid})"
-      if [[ "$DRY_RUN" != "1" ]]; then
-        echo "${gid},missing_spectrum,${bn}" >> "$MISSING_ASSETS_CSV"
-      fi
-      continue
-    fi
-    n_specs=$((n_specs + 1))
-    run_cmd "$PY" -m darkhunter_rv.pipeline "$spec" \
-      --instrument APF \
-      --update \
-      --plots \
-      --plots-focus \
-      --plots-only
-  done < <(
-    awk '/^\[PIPELINE RESULTS\]/{show=1; next}
-         show && $0 !~ /^#/ && NF >= 5 { print $1 }' "$summ"
-  )
-done
-echo "plot_pass: summaries=${#SUMMARY_FILES[@]} pipeline_invocations=$n_specs"
+echo "=== Summary-based RV plots (no pipeline rerun) ==="
+plot_args=(
+  scripts/plot_rv_from_summaries.py
+  --summary-dir "$OUT"
+  --plots-root "$OUT"
+  --reports-dir "$REPORTS_DIR"
+)
+if [[ -n "$STAR_ID" ]]; then
+  plot_args+=(--star-id "$STAR_ID")
+fi
+run_cmd "$PY" "${plot_args[@]}"
 
 echo "=== Stage website files into stars/Gaia_DR3_<id>/Gaia/... ==="
 staged_stars=0

@@ -163,6 +163,25 @@ def test_fit_keplerian_clips_initial_guess() -> None:
     assert np.all(np.isfinite(params))
 
 
+def test_parse_summary_includes_external_rvs(tmp_path: Path) -> None:
+    summ = tmp_path / "Gaia_DR3_123_summary.txt"
+    summ.write_text(
+        "[GAIA METADATA]\nSource_ID: 123\nRA: 1.0\nDec: 2.0\n"
+        "\n[EXTERNAL RV DATA]\n"
+        "LAMOST_LRS 59000.0 -20.0 1.2 z_meas\n"
+        "\n[PIPELINE RESULTS]\n"
+        "Gaia_DR3_123_epoch_1.txt 60000.0 -10.0 0.2 0.3 False\n"
+        "Gaia_DR3_123_epoch_2_kpf.txt 60001.0 -9.0 0.2 0.3 False\n"
+    )
+    pts = fitmod.parse_summary(summ)
+    assert len(pts) == 3
+    lit = [p for p in pts if p.is_literature]
+    ours = [p for p in pts if not p.is_literature]
+    assert len(lit) == 1
+    assert lit[0].telescope == "LAMOST_LRS"
+    assert sorted(p.telescope for p in ours) == ["APF", "KPF"]
+
+
 def test_load_nss_priors_includes_inclination(tmp_path: Path) -> None:
     summ = tmp_path / "Gaia_DR3_1_summary.txt"
     summ.write_text(

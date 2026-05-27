@@ -45,6 +45,8 @@ class RVPoint:
     rv_err: float
     rms: float
     file: str
+    telescope: str = "APF"
+    is_literature: bool = False
 
 
 def _parse_gaia_metadata(path: Path) -> Optional[Dict[str, Any]]:
@@ -388,6 +390,17 @@ def prefetch_gaia_nss_bulk(source_ids: List[str], cache_path: Path, chunk_size: 
     print(f"INFO:root:Gaia cache warmup done: {len(uniq)} ids scanned, {fetched} fetched, {time.time()-t0:.2f}s")
 
 
+def _pipeline_telescope_from_filename(name: str) -> str:
+    s = name.lower()
+    if "kpf" in s:
+        return "KPF"
+    if "ghost" in s:
+        return "GHOST"
+    if "maroon" in s:
+        return "MAROON-X"
+    return "APF"
+
+
 def parse_summary(path: Path) -> List[RVPoint]:
     text = path.read_text(encoding="utf-8", errors="replace")
     if "[PIPELINE RESULTS]" in text:
@@ -415,10 +428,42 @@ def parse_summary(path: Path) -> List[RVPoint]:
                     rv=float(parts[2]),
                     rv_err=max(float(parts[3]), 1e-4),
                     rms=max(abs(float(parts[4])), 1e-4),
+                    telescope=_pipeline_telescope_from_filename(parts[0]),
+                    is_literature=False,
                 )
             )
         except ValueError:
             continue
+    # Include literature RVs from [EXTERNAL RV DATA] when present.
+    try:
+        from darkhunter_rv.gaia_utils import parse_external_rvs_from_star_summary
+
+        ext_rows = parse_external_rvs_from_star_summary(path)
+    except Exception:
+        ext_rows = []
+    for r in ext_rows:
+        try:
+            mjd = float(r.get("mjd", float("nan")))
+            rv = float(r.get("rv", float("nan")))
+            rv_err = float(r.get("rv_err", float("nan")))
+            tel = str(r.get("telescope", "LITERATURE") or "LITERATURE")
+        except Exception:
+            continue
+        if not np.isfinite(mjd) or not np.isfinite(rv):
+            continue
+        if not np.isfinite(rv_err) or rv_err <= 0:
+            rv_err = 1.0
+        points.append(
+            RVPoint(
+                file=f"external:{tel}",
+                mjd=mjd,
+                rv=rv,
+                rv_err=max(rv_err, 1e-4),
+                rms=max(rv_err, 1e-4),
+                telescope=tel,
+                is_literature=True,
+            )
+        )
     points.sort(key=lambda p: p.mjd)
     return points
 
@@ -860,7 +905,49 @@ def build_plot(
         except Exception:
             pass
     ax.axvline(now_mjd, color="0.35", ls="--", lw=1.2, alpha=0.9)
-    ax.errorbar(t, y, yerr=yerr_rms, fmt="o", ms=5, lw=1, capsize=2)
+    # Plot symbols/colors:
+    # - Our data (black): APF=o, KPF=s, GHOST=p, MAROON-X=x
+    # - Literature (dark grey): diamond
+    plotted_any = False
+    tel_marker = {"APF": "o", "KPF": "s", "GHOST": "p", "MAROON-X": "x"}
+    for tel, marker in tel_marker.items():
+        idx = [i for i, p in enumerate(points) if (not p.is_literature and str(p.telescope).upper() == tel)]
+        if not idx:
+            continue
+        ax.errorbar(
+            t[idx],
+            y[idx],
+            yerr=yerr_rms[idx],
+            fmt=marker,
+            ms=5,
+            lw=1,
+            capsize=2,
+            color="black",
+            ecolor="black",
+            mec="black",
+            mfc=("black" if marker != "x" else "none"),
+            label=tel,
+        )
+        plotted_any = True
+    idx_lit = [i for i, p in enumerate(points) if p.is_literature]
+    if idx_lit:
+        ax.errorbar(
+            t[idx_lit],
+            y[idx_lit],
+            yerr=yerr_rms[idx_lit],
+            fmt="D",
+            ms=4.8,
+            lw=1,
+            capsize=2,
+            color="0.35",
+            ecolor="0.35",
+            mec="0.35",
+            mfc="0.35",
+            label="Literature",
+        )
+        plotted_any = True
+    if not plotted_any:
+        ax.errorbar(t, y, yerr=yerr_rms, fmt="o", ms=5, lw=1, capsize=2, color="black")
     ax.plot(t_dense, y_dense, "-", lw=2)
     ax.set_xlabel("MJD")
     ax.set_ylabel("RV (km/s)")
@@ -872,6 +959,8 @@ def build_plot(
     ax.yaxis.set_minor_locator(AutoMinorLocator())
     ax.tick_params(axis="both", which="major", direction="in", length=7, width=1.1, top=True, right=True)
     ax.tick_params(axis="both", which="minor", direction="in", length=3.5, width=0.9, top=True, right=True)
+    if plotted_any:
+        ax.legend(loc="best", fontsize=8.5)
 
     p_day = int(round(report["P_days"]))
     next_min_mjd = float(report["next_rv_min_mjd"])
