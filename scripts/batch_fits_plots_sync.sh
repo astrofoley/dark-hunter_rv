@@ -238,6 +238,19 @@ try:
 except ValueError as exc:
     raise SystemExit(f"Required data.csv column missing: {exc}")
 
+# Add requested derived-mass columns when missing.
+col_m2sini = "M2sin i (Msun)"
+col_m2over = "(M2sin i)/(sin i) (Msun)"
+if col_m2sini not in hdr:
+    hdr.append(col_m2sini)
+if col_m2over not in hdr:
+    hdr.append(col_m2over)
+for r in rows[1:]:
+    while len(r) < len(hdr):
+        r.append("")
+m2sini_i = hdr.index(col_m2sini)
+m2over_i = hdr.index(col_m2over)
+
 updated = 0
 for r in rows[1:]:
     if not r:
@@ -259,6 +272,10 @@ for r in rows[1:]:
             r.append("")
         r[m2_i] = f"{float(m2):.5f}"
         updated += 1
+    if isinstance(m2s, (int, float)):
+        r[m2sini_i] = f"{float(m2s):.5f}"
+    if isinstance(m2i, (int, float)):
+        r[m2over_i] = f"{float(m2i):.5f}"
 
 with data_csv.open("w", newline="", encoding="utf-8") as fh:
     writer = csv.writer(fh)
