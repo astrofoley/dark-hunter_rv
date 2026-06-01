@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dark Hunters Gaia Binary Explorer</title>
+    <link rel="shortcut icon" href="#">
+    <link rel="stylesheet" href="style.css">
+
+</head>
+<body>
+
+<header class="site-header">
+    <h1>Dark Hunters Gaia Binary Explorer</h1>
+</header>
+<div id="input-box">
+    <table class="input-container" id="search-holder">
+        <tr>
+            <td>Star Search:</td>
+            <td class="input-cell">
+                <input type="text" placeholder="Gaia ID" id="STARinput">
+            </td>
+            <td class="input-cell">
+                <button onclick="starSearch(0,'STARinput')">Submit</button>
+            </td>
+        </tr>
+    </table>
+</div>
+<div id="table-controls">
+    <div id="controls-left">
+        <div id="pagination-row">
+            <label for="page-size">Rows:</label>
+            <select id="page-size">
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="all">All</option>
+            </select>
+            <button id="page-first" type="button">First</button>
+            <button id="page-prev" type="button">Prev</button>
+            <button id="page-next" type="button">Next</button>
+            <button id="page-last" type="button">Last</button>
+            <span id="page-status">Page 1/1</span>
+        </div>
+        <div id="action-row">
+            <button id="copy-view-link" type="button">Copy view link</button>
+            <button id="download-selected" type="button">Download selected CSV</button>
+            <button id="sort-apf-count" type="button">Sort by APF points ↓</button>
+            <button id="sort-kpf-count" type="button">Sort by KPF points ↓</button>
+            <button id="sort-apf-recent" type="button">Sort by recent APF ↓</button>
+            <button id="sort-kpf-recent" type="button">Sort by recent KPF ↓</button>
+        </div>
+        <div id="query-toggles-row">
+            <div class="toggle-row">
+                <label class="toggle-tile"><input type="checkbox" id="toggle-rv"><span class="toggle-title">RV curve</span><span id="count-rv" class="toggle-count">(0)</span></label>
+                <label class="toggle-tile"><input type="checkbox" id="toggle-apf-data"><span class="toggle-title">APF data</span><span id="count-apf-data" class="toggle-count">(0)</span></label>
+                <label class="toggle-tile"><input type="checkbox" id="toggle-keck"><span class="toggle-title">KPF data</span><span id="count-keck" class="toggle-count">(0)</span></label>
+                <label class="toggle-tile"><input type="checkbox" id="toggle-recent-apf"><span class="toggle-title">Recent APF data (&lt;30d)</span><span id="count-recent-apf" class="toggle-count">(0)</span></label>
+                <label class="toggle-tile"><input type="checkbox" id="toggle-recent-apf-week"><span class="toggle-title">Recent APF data (&lt;7d)</span><span id="count-recent-apf-week" class="toggle-count">(0)</span></label>
+                <label class="toggle-tile"><input type="checkbox" id="toggle-recent-keck"><span class="toggle-title">Recent KPF data (&lt;30d)</span><span id="count-recent-keck" class="toggle-count">(0)</span></label>
+                <label class="toggle-tile"><input type="checkbox" id="toggle-recent-keck-week"><span class="toggle-title">Recent KPF data (&lt;7d)</span><span id="count-recent-keck-week" class="toggle-count">(0)</span></label>
+            </div>
+            <div class="toggle-row">
+                <label class="toggle-tile"><input type="checkbox" id="toggle-flux"><span class="toggle-title">H-beta</span><span id="count-flux" class="toggle-count">(0)</span></label>
+                <label class="toggle-tile"><span class="toggle-title">Broad lines</span><select id="toggle-param-1"><option value="">Any</option><option value="Y">Y</option><option value="N">N</option></select><span id="count-param-1" class="toggle-count">(Y:0 N:0)</span></label>
+                <label class="toggle-tile"><span class="toggle-title">Complete orbit now</span><select id="toggle-param-2"><option value="">Any</option><option value="Y">Y</option><option value="N">N</option></select><span id="count-param-2" class="toggle-count">(Y:0 N:0)</span></label>
+                <label class="toggle-tile"><span class="toggle-title">Complete orbit by DR4</span><select id="toggle-param-5"><option value="">Any</option><option value="Y">Y</option><option value="N">N</option></select><span id="count-param-5" class="toggle-count">(Y:0 N:0)</span></label>
+                <label class="toggle-tile"><span class="toggle-title">Jerk star</span><select id="toggle-param-3"><option value="">Any</option><option value="Y">Y</option><option value="N">N</option></select><span id="count-param-3" class="toggle-count">(Y:0 N:0)</span></label>
+                <label class="toggle-tile"><span class="toggle-title">Clear variability</span><select id="toggle-param-4"><option value="">Any</option><option value="Y">Y</option><option value="N">N</option></select><span id="count-param-4" class="toggle-count">(Y:0 N:0)</span></label>
+                <label class="toggle-tile"><span class="toggle-title">Low S/N</span><select id="toggle-param-6"><option value="">Any</option><option value="Y">Y</option><option value="N">N</option></select><span id="count-param-6" class="toggle-count">(Y:0 N:0)</span></label>
+            </div>
+        </div>
+    </div>
+</div>
+<table id="csv-container"></table>
+<div id="last-updated">Last updated: loading...</div>
+<div id="page-credit">
+    <div><span class="credit-label">Team:</span> <span class="credit-value">Kirsty Taggart, Shep Brooke, Jeff Andrews, Ryan Foley</span></div>
+    <div><span class="credit-label">Website:</span> <span class="credit-value">by Kirsty Taggart and Shep Brooke</span></div>
+    <div>
+        <span class="credit-label">Paper:</span>
+        <a id="sample-paper-link" href="https://arxiv.org/abs/2207.00680" target="_blank" rel="noopener noreferrer">
+            ATF22 (Andrews, Taggart, Foley)
+        </a>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/4.1.2/papaparse.js"></script>
+<script src="script.js"></script>
+
+</body>
+</html>

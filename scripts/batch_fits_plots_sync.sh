@@ -10,18 +10,22 @@
 #
 # Usage:
 #   bash scripts/batch_fits_plots_sync.sh
+#   WEB_ROOT=/var/www/html/darkhunter/rv RUN_FITS=0 MIN_POINTS=5 bash scripts/batch_fits_plots_sync.sh
 #   DRY_RUN=1 bash scripts/batch_fits_plots_sync.sh
 #   STAR_ID=1702370142434513152 bash scripts/batch_fits_plots_sync.sh   # canary
+#
+# One-time site setup (static HTML/JS/CSS): bash scripts/setup_website.sh
 
 set -euo pipefail
 
 REPO="${REPO:-/data2/darkhunter/dark-hunter_rv}"
 OUT="${OUT:-$REPO/output}"
-WEB_ROOT="${WEB_ROOT:-/data2/gaia_stars/dark-hunter_rv-kirsty}"
+WEB_ROOT="${WEB_ROOT:-/var/www/html/darkhunter/rv}"
 PY="${PY:-/home/marley/anaconda2/envs/gaia-env/bin/python}"
 REPORTS_DIR="${REPORTS_DIR:-$REPO/rv_fit_reports}"
 LOG="${LOG:-$REPO/batch_fits_plots_sync.log}"
 MIN_POINTS="${MIN_POINTS:-7}"
+RUN_FITS="${RUN_FITS:-1}"
 FIT_FORCE="${FIT_FORCE:-1}"
 QUERY_GAIA_ONLINE="${QUERY_GAIA_ONLINE:-0}"
 DRY_RUN="${DRY_RUN:-0}"
@@ -97,31 +101,35 @@ for summ in "${SUMMARY_FILES[@]}"; do
 done
 echo "summaries=${#SUMMARY_FILES[@]} with_epochs>=${MIN_POINTS}: $n_ge_min"
 
-echo "=== Keplerian fits ==="
-fit_args=(
-  fit_apf_rv_keplerian.py
-  --all
-  --output-dir "$OUT"
-  --use-gaia-nss
-  --min-points "$MIN_POINTS"
-  --reports-dir "$REPORTS_DIR"
-)
-if [[ "$FIT_FORCE" == "1" ]]; then
-  fit_args+=(--force)
-fi
-if [[ "$QUERY_GAIA_ONLINE" == "1" ]]; then
-  fit_args+=(--query-gaia-online)
-fi
-if [[ -n "$STAR_ID" ]]; then
-  fit_args=(fit_apf_rv_keplerian.py --summary "$OUT/Gaia_DR3_${STAR_ID}_summary.txt" --output-dir "$OUT" --use-gaia-nss --min-points "$MIN_POINTS" --reports-dir "$REPORTS_DIR")
+if [[ "$RUN_FITS" == "1" ]]; then
+  echo "=== Keplerian fits ==="
+  fit_args=(
+    fit_apf_rv_keplerian.py
+    --all
+    --output-dir "$OUT"
+    --use-gaia-nss
+    --min-points "$MIN_POINTS"
+    --reports-dir "$REPORTS_DIR"
+  )
   if [[ "$FIT_FORCE" == "1" ]]; then
     fit_args+=(--force)
   fi
   if [[ "$QUERY_GAIA_ONLINE" == "1" ]]; then
     fit_args+=(--query-gaia-online)
   fi
+  if [[ -n "$STAR_ID" ]]; then
+    fit_args=(fit_apf_rv_keplerian.py --summary "$OUT/Gaia_DR3_${STAR_ID}_summary.txt" --output-dir "$OUT" --use-gaia-nss --min-points "$MIN_POINTS" --reports-dir "$REPORTS_DIR")
+    if [[ "$FIT_FORCE" == "1" ]]; then
+      fit_args+=(--force)
+    fi
+    if [[ "$QUERY_GAIA_ONLINE" == "1" ]]; then
+      fit_args+=(--query-gaia-online)
+    fi
+  fi
+  run_cmd "$PY" "${fit_args[@]}"
+else
+  echo "=== Keplerian fits (skipped: RUN_FITS=0) ==="
 fi
-run_cmd "$PY" "${fit_args[@]}"
 
 echo "=== Summary-based RV plots (no pipeline rerun) ==="
 plot_args=(
