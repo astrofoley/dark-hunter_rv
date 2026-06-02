@@ -846,6 +846,48 @@ def solve_m2_with_inclination_msun(f_mass: float, m1: float, inclination_deg: fl
     return float(out) if np.isfinite(out) and out > 0 else None
 
 
+def _finite_mass_value(value: Any) -> Optional[float]:
+    if isinstance(value, (int, float)) and np.isfinite(value) and float(value) > 0:
+        return float(value)
+    return None
+
+
+def website_table_masses_from_report(report: dict) -> Dict[str, Optional[float]]:
+    """
+    Map a Keplerian fit JSON report to website ``data.csv`` mass columns.
+
+    - ``m2_msun``: Gaia NSS astrometric M2 (with Gaia M1), not from the RV fit.
+    - ``m2sin_i_msun``: M2 sin i from the RV-only (free) fit and assumed M1.
+    - ``m2_at_i_msun``: M2 at i from the RV-only f(M), assumed M1, and astrometric i.
+    """
+    return {
+        "m2_msun": _finite_mass_value(report.get("used_m2_msun")),
+        "m2sin_i_msun": _finite_mass_value(report.get("m2sini_msun")),
+        "m2_at_i_msun": _finite_mass_value(report.get("m2_given_inclination_msun")),
+    }
+
+
+def rv_only_mass_estimates(
+    rep_free: dict,
+    m1_msun: Optional[float],
+    inclination_deg: Optional[float],
+) -> Tuple[Optional[float], Optional[float]]:
+    """M2 sin i and M2 at i from the RV-only Keplerian report and astrometric inputs."""
+    fm = rep_free.get("mass_function_msun")
+    if fm is None or not np.isfinite(fm):
+        fm = mass_function_msun(rep_free["P_days"], rep_free["K_kms"], rep_free["e"])
+    if fm is None or not np.isfinite(fm) or fm <= 0:
+        return None, None
+    m1 = _finite_mass_value(m1_msun)
+    if m1 is None:
+        return None, None
+    m2sini = float(solve_m2sini_msun(float(fm), m1))
+    m2_at_i = None
+    if inclination_deg is not None and np.isfinite(inclination_deg):
+        m2_at_i = solve_m2_with_inclination_msun(float(fm), m1, float(inclination_deg))
+    return m2sini, m2_at_i
+
+
 def fit_all_variants(
     t: np.ndarray,
     y: np.ndarray,
@@ -1329,35 +1371,11 @@ def run_one(
         None if fit_inclination_deg is None else float(fit_inclination_deg)
     )
 
-    f_mass = report.get("mass_function_msun")
-    if f_mass is None or not np.isfinite(f_mass):
-        fm_calc = mass_function_msun(report["P_days"], report["K_kms"], report["e"])
-        f_mass = float(fm_calc) if np.isfinite(fm_calc) else None
-    report["mass_function_msun"] = f_mass
-    m2sini = None
-    if (
-        f_mass is not None
-        and np.isfinite(f_mass)
-        and f_mass > 0
-        and fit_m1_msun is not None
-        and np.isfinite(fit_m1_msun)
-        and fit_m1_msun > 0
-    ):
-        m2sini = solve_m2sini_msun(float(f_mass), float(fit_m1_msun))
-    report["m2sini_msun"] = None if m2sini is None else float(m2sini)
-
-    m2_incl = None
-    if (
-        fit_m1_msun is not None
-        and np.isfinite(fit_m1_msun)
-        and fit_m1_msun > 0
-        and fit_inclination_deg is not None
-        and np.isfinite(fit_inclination_deg)
-    ):
-        m2_incl = solve_m2_with_inclination_msun(
-            f_mass, float(fit_m1_msun), float(fit_inclination_deg)
-        )
-    report["m2_given_inclination_msun"] = None if m2_incl is None else float(m2_incl)
+    _, rep_free = fit_variants["free"]
+    m2sini, m2_at_i = rv_only_mass_estimates(rep_free, fit_m1_msun, fit_inclination_deg)
+    report["m2sini_msun"] = m2sini
+    report["m2_given_inclination_msun"] = m2_at_i
+    report["m2_astrometric_msun"] = report["used_m2_msun"]
 
     plot_multi_fit(summary_path, points_fit, fit_variants, report, out_png, m1_msun=fit_m1_msun)
     plot_fit_residuals(

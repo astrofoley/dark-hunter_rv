@@ -4,7 +4,7 @@
 # 2) Generate APF RV plots from summaries (no pipeline rerun)
 # 3) Stage files into website contract:
 #    stars/Gaia_DR3_<id>/Gaia/{<id>_summary.txt,Plots/*,RV_Fit/*}
-# 4) Update tables/data.csv M2 column from fit JSON
+# 4) Update tables/data.csv M2 / M2sin i / M2 at i from fit JSON
 # 5) Produce QC reports
 # 6) rsync staged content to web root
 #
@@ -215,6 +215,8 @@ import json
 import os
 from pathlib import Path
 
+from fit_apf_rv_keplerian import website_table_masses_from_report
+
 report_dir = Path(os.environ["REPORTS_DIR"])
 data_csv = Path(os.environ["DATA_CSV"])
 missing_csv = Path(os.environ["MISSING_ASSETS_CSV"])
@@ -270,8 +272,10 @@ def move_columns_after(hdr, rows, names, after):
         for r, val in zip(rows, col_vals):
             r.insert(insert_at + offset, val)
 
+MEDIA_COLUMNS = frozenset({"RV PLOT", "RV FIT", "FLUX PLOT", "SOURCE IMAGE"})
+
 def clear_media_cells(hdr, rows):
-    for name in ("RV PLOT", "RV FIT", "FLUX PLOT", "SOURCE IMAGE"):
+    for name in MEDIA_COLUMNS:
         if name not in hdr:
             continue
         ci = hdr.index(name)
@@ -280,8 +284,19 @@ def clear_media_cells(hdr, rows):
                 r.append("")
             r[ci] = ""
 
+def clear_stray_plot_html(hdr, rows):
+    for ci, name in enumerate(hdr):
+        if name in MEDIA_COLUMNS:
+            continue
+        for r in rows:
+            while len(r) <= ci:
+                r.append("")
+            if r[ci] and "<img" in r[ci].lower():
+                r[ci] = ""
+
 move_columns_after(hdr, rows[1:], [col_m2sini, col_m2over], "M2 (Msun)")
 clear_media_cells(hdr, rows[1:])
+clear_stray_plot_html(hdr, rows[1:])
 m2sini_i = hdr.index(col_m2sini)
 m2over_i = hdr.index(col_m2over)
 
@@ -298,18 +313,23 @@ for r in rows[1:]:
     if not sid or sid not in reports:
         continue
     rep = reports[sid]
-    m2i = rep.get("m2_given_inclination_msun")
-    m2s = rep.get("m2sini_msun")
-    m2 = m2i if isinstance(m2i, (int, float)) else m2s
-    if isinstance(m2, (int, float)):
+    masses = website_table_masses_from_report(rep)
+    m2_astro = masses["m2_msun"]
+    m2s = masses["m2sin_i_msun"]
+    m2i = masses["m2_at_i_msun"]
+    if m2_astro is not None:
         while len(r) <= m2_i:
             r.append("")
-        r[m2_i] = f"{float(m2):.5f}"
+        r[m2_i] = f"{m2_astro:.5f}"
         updated += 1
-    if isinstance(m2s, (int, float)):
-        r[m2sini_i] = f"{float(m2s):.5f}"
-    if isinstance(m2i, (int, float)):
-        r[m2over_i] = f"{float(m2i):.5f}"
+    if m2s is not None:
+        while len(r) <= m2sini_i:
+            r.append("")
+        r[m2sini_i] = f"{m2s:.5f}"
+    if m2i is not None:
+        while len(r) <= m2over_i:
+            r.append("")
+        r[m2over_i] = f"{m2i:.5f}"
 
 with data_csv.open("w", newline="", encoding="utf-8") as fh:
     writer = csv.writer(fh)

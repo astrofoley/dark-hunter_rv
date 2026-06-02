@@ -62,6 +62,14 @@ Ensure Apache serves `/var/www/html/darkhunter/rv/` (existing `Alias` or symlink
 | Table **RV Fit** thumb | `RV_Fit/<id>_keplerian_fit.png` (fits only) |
 | Table **RV Fit** click | `Plots/<id>_keplerian_residuals.png` (fits + residuals) |
 
+**Mass columns in `tables/data.csv`** (from `*_keplerian_fit.json` after a fit pass):
+
+| Column | Meaning |
+|--------|---------|
+| **M2 (Msun)** | Gaia NSS astrometric secondary mass (`used_m2_msun`), not from the RV fit |
+| **M2sin i (Msun)** | RV-only Keplerian fit, with assumed M1 |
+| **(M2sin i)/(sin i) (Msun)** | Same RV-only f(M) and M1, with Gaia astrometric inclination |
+
 ```bash
 cd /data2/darkhunter/dark-hunter_rv
 
@@ -85,6 +93,8 @@ Plots/staging only (no refit):
 WEB_ROOT=/var/www/html/darkhunter/rv RUN_FITS=0 RUN_RV_PLOTS=1 MIN_POINTS=5 \
   bash scripts/populate_website.sh
 ```
+
+**Symptoms without a full deploy:** RV thumbnails under **M2 sin i** (stray `<img>` in `data.csv`), correct RV plots only in **RV Curve** (new `script.js`), no **H-beta** (PNGs missing or not built). Run the repair block below.
 
 **Repair shifted columns / stale embedded `<img>` in `data.csv`** (after a bad populate, or once after upgrading):
 
