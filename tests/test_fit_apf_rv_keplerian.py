@@ -252,6 +252,26 @@ def test_load_nss_priors_includes_inclination(tmp_path: Path) -> None:
     assert priors["inclination_deg"] == pytest.approx(74.5)
 
 
+def test_website_table_masses_from_report_separates_sources() -> None:
+    rep = {
+        "used_m2_msun": 0.55,
+        "m2sini_msun": 0.42,
+        "m2_given_inclination_msun": 0.48,
+    }
+    cols = fitmod.website_table_masses_from_report(rep)
+    assert cols["m2_msun"] == pytest.approx(0.55)
+    assert cols["m2sin_i_msun"] == pytest.approx(0.42)
+    assert cols["m2_at_i_msun"] == pytest.approx(0.48)
+
+
+def test_rv_only_mass_estimates_use_free_fit() -> None:
+    rep_free = {"P_days": 10.0, "K_kms": 40.0, "e": 0.1, "mass_function_msun": 0.05}
+    m2s, m2i = fitmod.rv_only_mass_estimates(rep_free, m1_msun=1.0, inclination_deg=90.0)
+    assert m2s is not None
+    assert m2i is not None
+    assert m2i == pytest.approx(m2s, rel=1e-6)
+
+
 def test_solve_m2_with_inclination_matches_edge_on() -> None:
     # At i=90 deg, m2(with i) should match m2 sin(i).
     f_mass = 0.12

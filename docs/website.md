@@ -62,6 +62,14 @@ Ensure Apache serves `/var/www/html/darkhunter/rv/` (existing `Alias` or symlink
 | Table **RV Fit** thumb | `RV_Fit/<id>_keplerian_fit.png` (fits only) |
 | Table **RV Fit** click | `Plots/<id>_keplerian_residuals.png` (fits + residuals) |
 
+**Mass columns in `tables/data.csv`** (from `*_keplerian_fit.json` after a fit pass):
+
+| Column | Meaning |
+|--------|---------|
+| **M2 (Msun)** | Gaia NSS astrometric secondary mass (`used_m2_msun`), not from the RV fit |
+| **M2sin i (Msun)** | RV-only Keplerian fit, with assumed M1 |
+| **(M2sin i)/(sin i) (Msun)** | Same RV-only f(M) and M1, with Gaia astrometric inclination |
+
 ```bash
 cd /data2/darkhunter/dark-hunter_rv
 
