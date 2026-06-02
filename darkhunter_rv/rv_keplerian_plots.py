@@ -436,6 +436,6 @@ def plot_fit_residuals(
     ax_bot.legend(loc="best", fontsize=7)
 
     out_png.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
+    fig.subplots_adjust(hspace=0.12)
     fig.savefig(out_png, dpi=180, bbox_inches="tight", pad_inches=0.06)
     plt.close(fig)
