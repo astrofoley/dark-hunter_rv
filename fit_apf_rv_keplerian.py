@@ -1360,7 +1360,9 @@ def run_one(
     report["m2_given_inclination_msun"] = None if m2_incl is None else float(m2_incl)
 
     plot_multi_fit(summary_path, points_fit, fit_variants, report, out_png, m1_msun=fit_m1_msun)
-    plot_fit_residuals(summary_path, points_fit, fit_variants, report, resid_png)
+    plot_fit_residuals(
+        summary_path, points_fit, fit_variants, report, resid_png, m1_msun=fit_m1_msun
+    )
     ours = our_telescope_points(points_fit)
     if len(ours) >= 2:
         plot_rv_data_only(summary_path, ours, report, data_png)
