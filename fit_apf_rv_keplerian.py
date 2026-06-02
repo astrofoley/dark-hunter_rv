@@ -728,7 +728,7 @@ def fit_keplerian(
     P = float(np.exp(params[0]))
     K = float(params[1])
     h, k = float(params[2]), float(params[3])
-    e = float(np.hypot(h, k))
+    e = float(min(max(np.hypot(h, k), 1e-8), 0.999))
     omega = float(np.arctan2(k, h))
     M0 = float(params[4])
     gamma = float(params[5])
@@ -791,8 +791,19 @@ def fit_keplerian(
 
 
 def mass_function_msun(P_days: float, K_kms: float, e: float) -> float:
-    # f(M) in Msun for P in days, K in km/s
-    return 1.036149e-7 * (K_kms ** 3) * P_days * ((1.0 - e * e) ** 1.5)
+    """Mass function (Msun) for P in days, K in km/s. Returns NaN if inputs are non-physical."""
+    if not (np.isfinite(P_days) and np.isfinite(K_kms) and np.isfinite(e)):
+        return float("nan")
+    p = float(P_days)
+    k = float(K_kms)
+    ecc = float(np.clip(e, 0.0, 0.999))
+    if p <= 0.0 or k <= 0.0:
+        return float("nan")
+    one_minus_e2 = 1.0 - ecc * ecc
+    if one_minus_e2 <= 0.0:
+        return float("nan")
+    val = 1.036149e-7 * (k**3) * p * (one_minus_e2**1.5)
+    return float(val) if np.isfinite(val) else float("nan")
 
 
 def solve_m2sini_msun(f_mass: float, m1: float) -> float:
@@ -881,9 +892,8 @@ def fit_all_variants(
         except (ValueError, RuntimeError):
             continue
         rep["fit_variant"] = key
-        rep["mass_function_msun"] = float(
-            mass_function_msun(rep["P_days"], rep["K_kms"], rep["e"])
-        )
+        fm = mass_function_msun(rep["P_days"], rep["K_kms"], rep["e"])
+        rep["mass_function_msun"] = None if not np.isfinite(fm) else float(fm)
         if fix_p is not None:
             rep["fixed_period_days"] = float(fix_p)
         if fix_e is not None:
@@ -1319,11 +1329,21 @@ def run_one(
         None if fit_inclination_deg is None else float(fit_inclination_deg)
     )
 
-    f_mass = float(report.get("mass_function_msun", mass_function_msun(report["P_days"], report["K_kms"], report["e"])))
+    f_mass = report.get("mass_function_msun")
+    if f_mass is None or not np.isfinite(f_mass):
+        fm_calc = mass_function_msun(report["P_days"], report["K_kms"], report["e"])
+        f_mass = float(fm_calc) if np.isfinite(fm_calc) else None
     report["mass_function_msun"] = f_mass
     m2sini = None
-    if fit_m1_msun is not None and np.isfinite(fit_m1_msun) and fit_m1_msun > 0:
-        m2sini = solve_m2sini_msun(f_mass, float(fit_m1_msun))
+    if (
+        f_mass is not None
+        and np.isfinite(f_mass)
+        and f_mass > 0
+        and fit_m1_msun is not None
+        and np.isfinite(fit_m1_msun)
+        and fit_m1_msun > 0
+    ):
+        m2sini = solve_m2sini_msun(float(f_mass), float(fit_m1_msun))
     report["m2sini_msun"] = None if m2sini is None else float(m2sini)
 
     m2_incl = None

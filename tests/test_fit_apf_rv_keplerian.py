@@ -177,6 +177,17 @@ def test_parse_summary_excludes_legacy_sentinel_rv(tmp_path: Path) -> None:
     assert len(pts) == 4
 
 
+def test_mass_function_msun_super_eccentric_returns_real() -> None:
+    """e > 1 must not produce complex (1-e^2)^1.5 when coerced with float()."""
+    fm = fitmod.mass_function_msun(100.0, 50.0, 1.2)
+    assert isinstance(fm, float)
+    assert np.isfinite(fm)
+
+
+def test_mass_function_msun_negative_k_is_nan() -> None:
+    assert not np.isfinite(fitmod.mass_function_msun(100.0, -50.0, 0.2))
+
+
 def test_fit_report_json_has_no_circular_reference() -> None:
     t = np.linspace(60000, 60100, 10)
     y = 10.0 * np.sin(2 * np.pi * t / 20.0)
