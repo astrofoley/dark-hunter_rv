@@ -20,6 +20,7 @@ This repo contains a **robust, echelle-aware RV measurement pipeline** targeting
 | [docs/rv_methods_evaluation.md](docs/rv_methods_evaluation.md) | Method validity, adopted-RV cascade, validation reports |
 | [docs/contributing.md](docs/contributing.md) | Doc map, pre-PR checklist, **git commands to open a PR** |
 | [docs/validation_playbook.md](docs/validation_playbook.md) | Validation campaigns |
+| [docs/website.md](docs/website.md) | Public RV explorer deploy (`/var/www/html/darkhunter/rv`) |
 
 ### Quick start
 
