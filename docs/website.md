@@ -51,27 +51,60 @@ Ensure Apache serves `/var/www/html/darkhunter/rv/` (existing `Alias` or symlink
 
 ## Populate / refresh star assets
 
-Plots + staging write directly under `WEB_ROOT` (no separate Kirsty mirror).
+`populate_website.sh` runs Keplerian fits (pipeline + literature epochs, excluding legacy sentinels such as −9999 km/s), writes:
+
+| File | Description |
+|------|-------------|
+| `Gaia_DR3_<id>_rv_plot.png` | Our data only (APF/KPF/…); Today + APF window |
+| `Gaia_DR3_<id>_keplerian_fit.png` | Four fits (free P/e, fixed P, fixed e, fixed P+e) |
+| `Gaia_DR3_<id>_keplerian_residuals.png` | Residuals vs RV-only fit (±5 km/s cap) |
+| `Gaia_DR3_<id>_28_hbeta.png` | Stacked Hβ epochs (viridis vs time) |
 
 ```bash
 cd /data2/darkhunter/dark-hunter_rv
 
-# Full refresh (fits + plots + table M2 columns + rsync archives)
-WEB_ROOT=/var/www/html/darkhunter/rv MIN_POINTS=5 bash scripts/populate_website.sh
+# Regenerate everything (≥5 epochs per star, literature included in fits)
+WEB_ROOT=/var/www/html/darkhunter/rv MIN_POINTS=5 FIT_FORCE=1 bash scripts/populate_website.sh
+```
 
-# Skip refitting; reuse existing rv_fit_reports/*.json
-WEB_ROOT=/var/www/html/darkhunter/rv RUN_FITS=0 FIT_FORCE=0 MIN_POINTS=5 \
+Detached (full fits):
+
+```bash
+screen -dmS darkhunter_fits bash -lc '
+cd /data2/darkhunter/dark-hunter_rv
+WEB_ROOT=/var/www/html/darkhunter/rv MIN_POINTS=5 FIT_FORCE=1 RUN_FITS=1 \
+  bash scripts/populate_website.sh >> batch_fits_plots_sync.log 2>&1
+'
+```
+
+Plots/staging only (no refit):
+
+```bash
+WEB_ROOT=/var/www/html/darkhunter/rv RUN_FITS=0 RUN_RV_PLOTS=1 MIN_POINTS=5 \
   bash scripts/populate_website.sh
 ```
 
-Detached:
+Hβ stacks need per-epoch `*_h_beta*.png` from pipeline (`--plots` / `--plots-focus`). Build stacks alone:
 
 ```bash
-screen -dmS darkhunter_web bash -lc '
-cd /data2/darkhunter/dark-hunter_rv
-WEB_ROOT=/var/www/html/darkhunter/rv RUN_FITS=0 FIT_FORCE=0 MIN_POINTS=5 \
-  bash scripts/populate_website.sh >> batch_fits_plots_sync.log 2>&1
-'
+PYTHONPATH=. python3 scripts/build_hbeta_website_plots.py \
+  --summary-dir output --plots-root output
+```
+
+## Cron (new spectra → RVs → website)
+
+```bash
+REPO=/data2/darkhunter/dark-hunter_rv \
+WEB_ROOT=/var/www/html/darkhunter/rv \
+SPEC_ROOT=/data2/gaia_stars/apf_reductions \
+MIN_POINTS=5 \
+bash scripts/cron_update_rv_website.sh
+```
+
+Example crontab line:
+
+```cron
+0 6 * * * REPO=/data2/darkhunter/dark-hunter_rv WEB_ROOT=/var/www/html/darkhunter/rv SPEC_ROOT=/data2/gaia_stars/apf_reductions bash $REPO/scripts/cron_update_rv_website.sh >> $REPO/logs/cron_rv_website.log 2>&1
 ```
 
 ## Repo source of truth
