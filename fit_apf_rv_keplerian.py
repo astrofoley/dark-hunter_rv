@@ -20,6 +20,7 @@ Optional:
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 import re
@@ -1305,13 +1306,15 @@ def run_one(
         print(f"[SKIP] {summary_path.name}: free RV fit failed")
         return None
 
-    params, report = fit_variants["free"]
+    params, _rep_free = fit_variants["free"]
+    # Deep copy so report["fit_variants"]["free"] is not the same dict as report (JSON circular ref).
+    report: dict = copy.deepcopy(_rep_free)
     report["summary_file"] = str(summary_path)
     report["gaia_source_id"] = gaia_source_id
     report["gaia_nss"] = gaia_nss
     report["nss_priors_source"] = nss_source
     report["observability_window"] = load_observability_window(gaia_source_id, observability_cache_path)
-    report["fit_variants"] = {k: v[1] for k, v in fit_variants.items()}
+    report["fit_variants"] = {k: copy.deepcopy(v[1]) for k, v in fit_variants.items()}
     report["params_by_variant"] = {k: np.asarray(v[0], dtype=float).tolist() for k, v in fit_variants.items()}
 
     stem = report_stem(summary_path, gaia_source_id)
