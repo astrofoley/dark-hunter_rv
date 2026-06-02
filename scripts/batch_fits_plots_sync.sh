@@ -272,8 +272,10 @@ def move_columns_after(hdr, rows, names, after):
         for r, val in zip(rows, col_vals):
             r.insert(insert_at + offset, val)
 
+MEDIA_COLUMNS = frozenset({"RV PLOT", "RV FIT", "FLUX PLOT", "SOURCE IMAGE"})
+
 def clear_media_cells(hdr, rows):
-    for name in ("RV PLOT", "RV FIT", "FLUX PLOT", "SOURCE IMAGE"):
+    for name in MEDIA_COLUMNS:
         if name not in hdr:
             continue
         ci = hdr.index(name)
@@ -282,8 +284,19 @@ def clear_media_cells(hdr, rows):
                 r.append("")
             r[ci] = ""
 
+def clear_stray_plot_html(hdr, rows):
+    for ci, name in enumerate(hdr):
+        if name in MEDIA_COLUMNS:
+            continue
+        for r in rows:
+            while len(r) <= ci:
+                r.append("")
+            if r[ci] and "<img" in r[ci].lower():
+                r[ci] = ""
+
 move_columns_after(hdr, rows[1:], [col_m2sini, col_m2over], "M2 (Msun)")
 clear_media_cells(hdr, rows[1:])
+clear_stray_plot_html(hdr, rows[1:])
 m2sini_i = hdr.index(col_m2sini)
 m2over_i = hdr.index(col_m2over)
 
