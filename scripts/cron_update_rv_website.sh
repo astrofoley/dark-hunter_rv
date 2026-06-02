@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # Cron-friendly: measure RVs on new/changed spectra, then Keplerian fits + website assets.
 #
-# Daily crontab (06:00 local) — append log; do not wrap in screen:
-#   0 6 * * * REPO=/data2/darkhunter/dark-hunter_rv WEB_ROOT=/var/www/html/darkhunter/rv SPEC_ROOT=/data2/gaia_stars/apf_reductions MIN_POINTS=5 /bin/bash $REPO/scripts/cron_update_rv_website.sh >> $REPO/logs/cron_rv_website.log 2>&1
+# Daily crontab (10:00 local). Use absolute paths in the schedule line — cron does NOT
+# expand inline REPO=... before >> $REPO/logs/... (empty REPO → /logs/...).
+#
+#   0 10 * * * /bin/bash /data2/darkhunter/dark-hunter_rv/scripts/cron_update_rv_website.sh
+#
+# Optional env (or set at top of crontab): REPO, WEB_ROOT, SPEC_ROOT, MIN_POINTS, PY
+# Logging: script appends to $REPO/logs/cron_rv_website.log (defaults work without exports).
 #
 # Env: REPO, OUT, WEB_ROOT, SPEC_ROOT, PY, MIN_POINTS, LOG, RUN_PIPELINE (default 1)
 
