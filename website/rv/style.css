@@ -110,15 +110,15 @@ th {
 }
 
 /* Hide UV image column in main table view */
-#csv-container th:nth-child(14),
-#csv-container td:nth-child(14) {
+#csv-container th.col-source-image,
+#csv-container td.col-source-image {
     display: none;
 }
 
-#csv-container td:nth-child(11) img,
-#csv-container td:nth-child(12) img,
-#csv-container td:nth-child(13) img,
-#csv-container td:nth-child(14) img {
+#csv-container td.col-rv-plot img,
+#csv-container td.col-rv-fit img,
+#csv-container td.col-flux-plot img,
+#csv-container td.col-source-image img {
     width: 100%;
     max-width: 300px;
     height: auto;

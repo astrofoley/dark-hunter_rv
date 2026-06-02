@@ -32,6 +32,7 @@ FIT_FORCE="${FIT_FORCE:-1}"
 QUERY_GAIA_ONLINE="${QUERY_GAIA_ONLINE:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 STAR_ID="${STAR_ID:-}" # optional canary mode
+SPEC_ROOT="${SPEC_ROOT:-/data2/gaia_stars/apf_reductions}"
 
 WEBSITE_STARS_DIR="$WEB_ROOT/stars"
 WEBSITE_TABLES_DIR="$WEB_ROOT/tables"
@@ -152,6 +153,7 @@ if [[ "$RUN_HBETA_PLOTS" == "1" ]]; then
     scripts/build_hbeta_website_plots.py
     --summary-dir "$OUT"
     --plots-root "$OUT"
+    --spec-root "${SPEC_ROOT:-/data2/gaia_stars/apf_reductions}"
   )
   if [[ -n "$STAR_ID" ]]; then
     hbeta_args+=(--star-id "$STAR_ID")
@@ -246,19 +248,40 @@ col_m2over = "(M2sin i)/(sin i) (Msun)"
 for col in (col_m2sini, col_m2over):
     if col not in hdr:
         hdr.append(col)
-# Place M2sin i and M2 at i immediately after Dark M2.
-col_m2 = "M2 (Msun)"
-if col_m2 in hdr:
-    m2_idx = hdr.index(col_m2)
-    for extra in (col_m2sini, col_m2over):
-        if extra in hdr:
-            hdr.remove(extra)
-    insert_at = m2_idx + 1
-    hdr.insert(insert_at, col_m2sini)
-    hdr.insert(insert_at + 1, col_m2over)
 for r in rows[1:]:
     while len(r) < len(hdr):
         r.append("")
+
+def move_columns_after(hdr, rows, names, after):
+    if after not in hdr:
+        return
+    insert_at = hdr.index(after) + 1
+    moving = [(hdr.index(name), name) for name in names if name in hdr]
+    if not moving:
+        return
+    extracted = []
+    for old_i, name in sorted(moving, key=lambda x: x[0], reverse=True):
+        hdr.pop(old_i)
+        col_vals = [r.pop(old_i) if old_i < len(r) else "" for r in rows]
+        extracted.append((name, list(reversed(col_vals))))
+    extracted.reverse()
+    for offset, (name, col_vals) in enumerate(extracted):
+        hdr.insert(insert_at + offset, name)
+        for r, val in zip(rows, col_vals):
+            r.insert(insert_at + offset, val)
+
+def clear_media_cells(hdr, rows):
+    for name in ("RV PLOT", "RV FIT", "FLUX PLOT", "SOURCE IMAGE"):
+        if name not in hdr:
+            continue
+        ci = hdr.index(name)
+        for r in rows:
+            while len(r) <= ci:
+                r.append("")
+            r[ci] = ""
+
+move_columns_after(hdr, rows[1:], [col_m2sini, col_m2over], "M2 (Msun)")
+clear_media_cells(hdr, rows[1:])
 m2sini_i = hdr.index(col_m2sini)
 m2over_i = hdr.index(col_m2over)
 

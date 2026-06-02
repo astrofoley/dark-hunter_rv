@@ -5,7 +5,9 @@ let last_updated = document.getElementById("last-updated");
 let page_status = document.getElementById("page-status");
 let lastUpdatedDate = null;
 const headers_array = ["RA", "DEC", "PARALLAX", "PMRA", "PMDEC", "PERIOD", "ECCENTRICITY", "M1", "M2"];
-const mediaColumns = new Set([10, 12, 13]); // RV PLOT, FLUX PLOT, SOURCE IMAGE
+const MEDIA_HEADERS = new Set(["RV PLOT", "RV FIT", "FLUX PLOT", "SOURCE IMAGE"]);
+let colByHeader = {};
+const ASSET_CACHE_BUST = String(Date.now());
 const RECENT_APF_DAYS = 30;
 const RECENT_KECK_DAYS = 30;
 const RECENT_WEEK_DAYS = 7;
@@ -387,6 +389,42 @@ async function loadOptionalSimbadCatalog() {
     }
 }
 
+function rebuildColumnIndex(headerRow) {
+    colByHeader = {};
+    if (!Array.isArray(headerRow)) {
+        return;
+    }
+    for (let i = 0; i < headerRow.length; i++) {
+        const h = String(headerRow[i] ?? "").trim();
+        if (h) {
+            colByHeader[h] = i;
+        }
+    }
+}
+
+function colIndex(headerName) {
+    return Object.prototype.hasOwnProperty.call(colByHeader, headerName) ? colByHeader[headerName] : -1;
+}
+
+function headerNameForIndex(colIdx) {
+    for (const name in colByHeader) {
+        if (colByHeader[name] === colIdx) {
+            return name;
+        }
+    }
+    return "";
+}
+
+function isMediaHeader(headerName) {
+    return MEDIA_HEADERS.has(headerName);
+}
+
+function buildPlotImgCell(thumbSrc, detailSrc, altText) {
+    const thumb = `${thumbSrc}?v=${ASSET_CACHE_BUST}`;
+    const href = detailSrc || thumbSrc;
+    return `<a href="${href}" target="_blank" rel="noopener noreferrer"><img src="${thumb}" alt="${altText}" onerror="this.closest('a').outerHTML='N/A';"></a>`;
+}
+
 function buildHbetaCellHtml(gaiaId) {
     if (!gaiaId) {
         return "N/A";
@@ -395,9 +433,10 @@ function buildHbetaCellHtml(gaiaId) {
     const kpfSrc = `stars/Gaia_DR3_${gaiaId}/Keck/Plots/Gaia_DR3_${gaiaId}_kpf_hbeta.png`;
     const hasKeck = KECK_GAIA_IDS.has(gaiaId);
     if (!hasKeck) {
-        return `<a href="${apfSrc}" target="_blank" rel="noopener noreferrer"><img src="${apfSrc}" alt="H-beta plot" onerror="this.closest('a').outerHTML='N/A';"></a>`;
+        return buildPlotImgCell(apfSrc, apfSrc, "H-beta plot");
     }
-    return `<a href="${apfSrc}" target="_blank" rel="noopener noreferrer" data-apf="${apfSrc}" data-kpf="${kpfSrc}"><img src="${apfSrc}" alt="H-beta plot" onerror="(function(img){var a=img.closest('a');if(!a){return;}if(!a.dataset.fallbackTried){a.dataset.fallbackTried='1';var kpf=a.getAttribute('data-kpf');if(kpf){a.href=kpf;img.src=kpf;return;}}a.outerHTML='N/A';})(this);"></a>`;
+    const thumb = `${apfSrc}?v=${ASSET_CACHE_BUST}`;
+    return `<a href="${apfSrc}" target="_blank" rel="noopener noreferrer" data-apf="${apfSrc}" data-kpf="${kpfSrc}"><img src="${thumb}" alt="H-beta plot" onerror="(function(img){var a=img.closest('a');if(!a){return;}if(!a.dataset.fallbackTried){a.dataset.fallbackTried='1';var kpf=a.getAttribute('data-kpf');if(kpf){a.href=kpf;img.src=kpf+'?v=${ASSET_CACHE_BUST}';return;}}a.outerHTML='N/A';})(this);"></a>`;
 }
 
 function buildApfRvPlotCellHtml(gaiaId) {
@@ -405,7 +444,7 @@ function buildApfRvPlotCellHtml(gaiaId) {
         return "N/A";
     }
     const src = `stars/Gaia_DR3_${gaiaId}/Gaia/Plots/Gaia_DR3_${gaiaId}_rv_plot.png`;
-    return `<a href="${src}" target="_blank" rel="noopener noreferrer"><img src="${src}" alt="APF RV plot" onerror="this.closest('a').outerHTML='N/A';"></a>`;
+    return buildPlotImgCell(src, src, "APF RV plot");
 }
 
 function buildKeckRvCellHtml(gaiaId) {
@@ -413,15 +452,16 @@ function buildKeckRvCellHtml(gaiaId) {
         return "N/A";
     }
     const src = `stars/Gaia_DR3_${gaiaId}/Keck/Plots/${gaiaId}_kpf_rv_plot.png`;
-    return `<a href="${src}" target="_blank" rel="noopener noreferrer"><img src="${src}" alt="KPF RV plot" onerror="this.closest('a').outerHTML='N/A';"></a>`;
+    return buildPlotImgCell(src, src, "KPF RV plot");
 }
 
 function buildRvFitCellHtml(gaiaId) {
     if (!gaiaId) {
         return "N/A";
     }
-    const src = `stars/Gaia_DR3_${gaiaId}/Gaia/RV_Fit/${gaiaId}_keplerian_fit.png`;
-    return `<a href="${src}" target="_blank" rel="noopener noreferrer"><img src="${src}" alt="APF RV fit" onerror="this.closest('a').outerHTML='N/A';"></a>`;
+    const thumb = `stars/Gaia_DR3_${gaiaId}/Gaia/RV_Fit/${gaiaId}_keplerian_fit.png`;
+    const detail = `stars/Gaia_DR3_${gaiaId}/Gaia/Plots/Gaia_DR3_${gaiaId}_keplerian_residuals.png`;
+    return buildPlotImgCell(thumb, detail, "APF RV fit");
 }
 
 function syncUrlState() {
@@ -1267,6 +1307,7 @@ function arrayToTable(tableData) {
     const yesNoColumnsByIndex = new Map();
     if (Array.isArray(tableData) && Array.isArray(tableData[0])) {
         const headerRow = tableData[0];
+        rebuildColumnIndex(headerRow);
         for (let i = 0; i < YES_NO_PARAMS.length; i++) {
             const colIdx = headerRow.indexOf(YES_NO_PARAMS[i].header);
             if (colIdx >= 0) {
@@ -1317,36 +1358,49 @@ function arrayToTable(tableData) {
                 text = normalized;
                 row.dataset[param.datasetKey] = normalized;
             }
-            if (i > 0 && colIdx !== 0 && !mediaColumns.has(colIdx) && !Number.isNaN(Number(text))) {
+            const headerName = i === 0 ? String(text ?? "").trim() : headerNameForIndex(colIdx);
+            if (i > 0 && colIdx !== 0 && !isMediaHeader(headerName) && !Number.isNaN(Number(text))) {
                 text = Number(text).toFixed(5);
             }
-            if (i > 0 && mediaColumns.has(colIdx)) {
+            if (i > 0 && isMediaHeader(headerName) && hasNonNAContent(text)) {
                 text = buildMediaCellHtml(text);
             }
-            if (i > 0 && colIdx === 10) {
-                const gaiaId = row.dataset.gaiaId || normalizeGaiaId(rowData["0"]);
-                const hasApfRvPlot = hasNonNAContent(rowData["10"]);
-                if (!hasApfRvPlot) {
-                    text = buildApfRvPlotCellHtml(gaiaId);
-                }
+            const rvPlotCol = colIndex("RV PLOT");
+            const rvFitCol = colIndex("RV FIT");
+            const fluxCol = colIndex("FLUX PLOT");
+            const sourceCol = colIndex("SOURCE IMAGE");
+            const dataProductsCol = colIndex("DATA PRODUCTS");
+            if (i > 0 && colIdx === rvPlotCol) {
+                cell.classList.add("col-rv-plot");
+                const gaiaId = row.dataset.gaiaId || normalizeGaiaId(rowData[String(colIndex("GAIA NAME"))] ?? rowData["0"]);
+                text = buildApfRvPlotCellHtml(gaiaId);
                 if (!hasNonNAContent(text) && KECK_GAIA_IDS.has(gaiaId)) {
                     text = buildKeckRvCellHtml(gaiaId);
                 }
             }
-            if (i > 0 && colIdx === 12) {
-                const gaiaId = row.dataset.gaiaId || normalizeGaiaId(rowData["0"]);
+            if (i > 0 && colIdx === sourceCol) {
+                cell.classList.add("col-source-image");
+            }
+            if (i > 0 && colIdx === fluxCol) {
+                cell.classList.add("col-flux-plot");
+                const gaiaId = row.dataset.gaiaId || normalizeGaiaId(rowData[String(colIndex("GAIA NAME"))] ?? rowData["0"]);
                 text = buildHbetaCellHtml(gaiaId);
             }
-            if (i > 0 && colIdx === 11) {
-                const gaiaId = row.dataset.gaiaId || normalizeGaiaId(rowData["0"]);
+            if (i > 0 && colIdx === rvFitCol) {
+                cell.classList.add("col-rv-fit");
+                const gaiaId = row.dataset.gaiaId || normalizeGaiaId(rowData[String(colIndex("GAIA NAME"))] ?? rowData["0"]);
                 text = buildRvFitCellHtml(gaiaId);
             }
-            if (i > 0 && colIdx === 14) {
+            if (i > 0 && colIdx === dataProductsCol) {
                 const base = extractHrefFromAnchorHtml(text);
                 const gaiaId = row.dataset.gaiaId || "";
                 row.dataset.starBase = gaiaId ? `stars/Gaia_DR3_${gaiaId}` : base;
-                row.dataset.hasApf = (hasNonNAContent(rowData["10"]) || hasNonNAContent(rowData["11"])) ? "1" : "0";
-                row.dataset.hasSwift = (hasNonNAContent(rowData["12"]) || hasNonNAContent(rowData["13"])) ? "1" : "0";
+                const rvPlotCell = rvPlotCol >= 0 ? rowData[String(rvPlotCol)] : "";
+                const rvFitCell = rvFitCol >= 0 ? rowData[String(rvFitCol)] : "";
+                const fluxCell = fluxCol >= 0 ? rowData[String(fluxCol)] : "";
+                const sourceCell = sourceCol >= 0 ? rowData[String(sourceCol)] : "";
+                row.dataset.hasApf = (hasNonNAContent(rvPlotCell) || hasNonNAContent(rvFitCell)) ? "1" : "0";
+                row.dataset.hasSwift = (hasNonNAContent(fluxCell) || hasNonNAContent(sourceCell)) ? "1" : "0";
                 row.dataset.hasKeck = KECK_GAIA_IDS.has(row.dataset.gaiaId || "") ? "1" : "0";
                 row.dataset.apfRecent = "unknown";
                 row.dataset.apfRecentWeek = "unknown";
