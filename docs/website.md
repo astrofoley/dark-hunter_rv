@@ -77,14 +77,26 @@ cd /data2/darkhunter/dark-hunter_rv
 WEB_ROOT=/var/www/html/darkhunter/rv MIN_POINTS=5 FIT_FORCE=1 bash scripts/populate_website.sh
 ```
 
-Detached (full fits):
+### Full overnight refresh (detached screen)
+
+Refits every star with **≥5** valid epochs (pipeline + literature; drops −9999 / NaN / |RV|≥5000 km/s), **force**-rebuilds all Keplerian and Hβ plots, repairs `data.csv`, and stages to the website. Run after merging website fixes (#19+):
 
 ```bash
-screen -dmS darkhunter_fits bash -lc '
-cd /data2/darkhunter/dark-hunter_rv
-WEB_ROOT=/var/www/html/darkhunter/rv MIN_POINTS=5 FIT_FORCE=1 RUN_FITS=1 \
-  bash scripts/populate_website.sh >> batch_fits_plots_sync.log 2>&1
+screen -dmS darkhunter_full_refresh bash -lc '
+  REPO=/data2/darkhunter/dark-hunter_rv
+  cd "$REPO" && git pull && bash scripts/full_website_refresh.sh
 '
+```
+
+Attach: `screen -r darkhunter_full_refresh` — Detach: `Ctrl-a d`  
+Logs: `/data2/darkhunter/dark-hunter_rv/logs/full_website_refresh.log` and `logs/batch_fits_plots_sync.log`
+
+Same without screen:
+
+```bash
+cd /data2/darkhunter/dark-hunter_rv
+git pull
+bash scripts/full_website_refresh.sh
 ```
 
 Plots/staging only (no refit):
@@ -120,9 +132,23 @@ PYTHONPATH=. python3 scripts/build_hbeta_website_plots.py \
   --spec-root /data2/gaia_stars/apf_reductions
 ```
 
-## Cron (new spectra → RVs → website)
+## Cron (daily: new spectra → RVs → fits → website)
+
+`scripts/cron_update_rv_website.sh` runs:
+
+1. **Pipeline** `--update` on `SPEC_ROOT` (new/changed `.flm` / `.txt` / `.fits` only).
+2. **Populate**: Keplerian fits (≥`MIN_POINTS`, literature included, bad RVs filtered), RV/Hβ plots, `data.csv` mass columns, staging to `WEB_ROOT`. Skips refit when the JSON is newer than the summary (`FIT_FORCE=0`).
+
+Install crontab (`crontab -e`):
+
+```cron
+0 6 * * * REPO=/data2/darkhunter/dark-hunter_rv WEB_ROOT=/var/www/html/darkhunter/rv SPEC_ROOT=/data2/gaia_stars/apf_reductions MIN_POINTS=5 /bin/bash $REPO/scripts/cron_update_rv_website.sh >> $REPO/logs/cron_rv_website.log 2>&1
+```
+
+Manual test:
 
 ```bash
+cd /data2/darkhunter/dark-hunter_rv
 REPO=/data2/darkhunter/dark-hunter_rv \
 WEB_ROOT=/var/www/html/darkhunter/rv \
 SPEC_ROOT=/data2/gaia_stars/apf_reductions \
@@ -130,11 +156,7 @@ MIN_POINTS=5 \
 bash scripts/cron_update_rv_website.sh
 ```
 
-Example crontab line:
-
-```cron
-0 6 * * * REPO=/data2/darkhunter/dark-hunter_rv WEB_ROOT=/var/www/html/darkhunter/rv SPEC_ROOT=/data2/gaia_stars/apf_reductions bash $REPO/scripts/cron_update_rv_website.sh >> $REPO/logs/cron_rv_website.log 2>&1
-```
+Log: `/data2/darkhunter/dark-hunter_rv/logs/cron_rv_website.log`
 
 ## Repo source of truth
 
