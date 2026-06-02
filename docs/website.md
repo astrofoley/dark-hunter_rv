@@ -94,6 +94,8 @@ WEB_ROOT=/var/www/html/darkhunter/rv RUN_FITS=0 RUN_RV_PLOTS=1 MIN_POINTS=5 \
   bash scripts/populate_website.sh
 ```
 
+**Symptoms without a full deploy:** RV thumbnails under **M2 sin i** (stray `<img>` in `data.csv`), correct RV plots only in **RV Curve** (new `script.js`), no **H-beta** (PNGs missing or not built). Run the repair block below.
+
 **Repair shifted columns / stale embedded `<img>` in `data.csv`** (after a bad populate, or once after upgrading):
 
 ```bash

@@ -36,9 +36,12 @@ def move_columns_after(hdr: list[str], rows: list[list[str]], names: list[str], 
             r.insert(insert_at + offset, val)
 
 
+MEDIA_COLUMNS = frozenset({"RV PLOT", "RV FIT", "FLUX PLOT", "SOURCE IMAGE"})
+
+
 def clear_media_cells(hdr: list[str], rows: list[list[str]]) -> None:
     """Drop legacy embedded <img> tags; the website builds plot URLs in script.js."""
-    for name in ("RV PLOT", "RV FIT", "FLUX PLOT", "SOURCE IMAGE"):
+    for name in MEDIA_COLUMNS:
         if name not in hdr:
             continue
         ci = hdr.index(name)
@@ -46,6 +49,21 @@ def clear_media_cells(hdr: list[str], rows: list[list[str]]) -> None:
             while len(r) <= ci:
                 r.append("")
             r[ci] = ""
+
+
+def clear_stray_plot_html(hdr: list[str], rows: list[list[str]]) -> int:
+    """Remove mis-placed <img> HTML from non-plot columns (e.g. M2 sin i after header reorder)."""
+    cleared = 0
+    for ci, name in enumerate(hdr):
+        if name in MEDIA_COLUMNS:
+            continue
+        for r in rows:
+            while len(r) <= ci:
+                r.append("")
+            if r[ci] and "<img" in r[ci].lower():
+                r[ci] = ""
+                cleared += 1
+    return cleared
 
 
 def main() -> int:
@@ -81,10 +99,14 @@ def main() -> int:
         "M2 (Msun)",
     )
     clear_media_cells(hdr, data_rows)
+    n_stray = clear_stray_plot_html(hdr, data_rows)
 
     with path.open("w", newline="", encoding="utf-8") as fh:
         csv.writer(fh).writerows(rows)
-    print(f"fixed: {path} ({len(rows) - 1} data rows, {len(hdr)} columns)")
+    print(
+        f"fixed: {path} ({len(rows) - 1} data rows, {len(hdr)} columns, "
+        f"cleared {n_stray} stray <img> cells)"
+    )
     return 0
 
 

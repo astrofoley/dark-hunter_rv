@@ -1359,6 +1359,15 @@ function arrayToTable(tableData) {
                 row.dataset[param.datasetKey] = normalized;
             }
             const headerName = i === 0 ? String(text ?? "").trim() : headerNameForIndex(colIdx);
+            if (
+                i > 0
+                && headerName
+                && !isMediaHeader(headerName)
+                && typeof text === "string"
+                && /<img\b/i.test(text)
+            ) {
+                text = "";
+            }
             if (i > 0 && colIdx !== 0 && !isMediaHeader(headerName) && !Number.isNaN(Number(text))) {
                 text = Number(text).toFixed(5);
             }
