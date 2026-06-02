@@ -58,7 +58,9 @@ Ensure Apache serves `/var/www/html/darkhunter/rv/` (existing `Alias` or symlink
 | `Gaia_DR3_<id>_rv_plot.png` | Our data only (APF/KPF/…); Today + APF window |
 | `Gaia_DR3_<id>_keplerian_fit.png` | Four fits (free P/e, fixed P, fixed e, fixed P+e) |
 | `Gaia_DR3_<id>_keplerian_residuals.png` | Residuals vs RV-only fit (±5 km/s cap) |
-| `Gaia_DR3_<id>_28_hbeta.png` | Stacked Hβ epochs (viridis vs time) |
+| `Gaia_DR3_<id>_28_hbeta.png` | All epochs on one axes (viridis by MJD) |
+| Table **RV Fit** thumb | `RV_Fit/<id>_keplerian_fit.png` (fits only) |
+| Table **RV Fit** click | `Plots/<id>_keplerian_residuals.png` (fits + residuals) |
 
 ```bash
 cd /data2/darkhunter/dark-hunter_rv
@@ -84,11 +86,28 @@ WEB_ROOT=/var/www/html/darkhunter/rv RUN_FITS=0 RUN_RV_PLOTS=1 MIN_POINTS=5 \
   bash scripts/populate_website.sh
 ```
 
-Hβ stacks need per-epoch `*_h_beta*.png` from pipeline (`--plots` / `--plots-focus`). Build stacks alone:
+**Repair shifted columns / stale embedded `<img>` in `data.csv`** (after a bad populate, or once after upgrading):
+
+```bash
+cd /data2/darkhunter/dark-hunter_rv
+git pull
+bash scripts/setup_website.sh
+PYTHONPATH=. python3 scripts/fix_data_csv_column_order.py \
+  --data-csv /var/www/html/darkhunter/rv/tables/data.csv
+WEB_ROOT=/var/www/html/darkhunter/rv RUN_FITS=0 RUN_HBETA_PLOTS=1 \
+  SPEC_ROOT=/data2/gaia_stars/apf_reductions \
+  bash scripts/populate_website.sh
+```
+
+Hard-refresh the browser once (`script.js` builds plot URLs from Gaia ID; thumbnails use a per-load cache-bust query).
+
+Hβ overlays read spectra under `SPEC_ROOT` (not per-epoch pipeline PNGs). Build alone:
 
 ```bash
 PYTHONPATH=. python3 scripts/build_hbeta_website_plots.py \
-  --summary-dir output --plots-root output
+  --summary-dir output \
+  --plots-root /var/www/html/darkhunter/rv/stars \
+  --spec-root /data2/gaia_stars/apf_reductions
 ```
 
 ## Cron (new spectra → RVs → website)
