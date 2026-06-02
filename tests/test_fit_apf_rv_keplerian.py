@@ -177,6 +177,22 @@ def test_parse_summary_excludes_legacy_sentinel_rv(tmp_path: Path) -> None:
     assert len(pts) == 4
 
 
+def test_fit_report_json_has_no_circular_reference() -> None:
+    t = np.linspace(60000, 60100, 10)
+    y = 10.0 * np.sin(2 * np.pi * t / 20.0)
+    yerr = np.full_like(y, 0.25)
+    variants = fitmod.fit_all_variants(
+        t, y, yerr, {"period_days": 20.0, "eccentricity": 0.1},
+        period_min=5.0, period_max=200.0, period_prior_sigma=0.2,
+    )
+    import copy
+    import json
+
+    report = copy.deepcopy(variants["free"][1])
+    report["fit_variants"] = {k: copy.deepcopy(v[1]) for k, v in variants.items()}
+    json.dumps(report)  # must not raise
+
+
 def test_fit_all_variants_includes_four_when_nss_present() -> None:
     t = np.linspace(60000, 60100, 12)
     y = 10.0 * np.sin(2 * np.pi * t / 20.0) + np.random.default_rng(0).normal(0, 0.2, t.size)
