@@ -56,8 +56,8 @@ Ensure Apache serves `/var/www/html/darkhunter/rv/` (existing `Alias` or symlink
 | File | Description |
 |------|-------------|
 | `Gaia_DR3_<id>_rv_plot.png` | Our data only (APF/KPF/…); Today + APF window |
-| `Gaia_DR3_<id>_keplerian_fit.png` | Four fits (free P/e, fixed P, fixed e, fixed P+e) |
-| `Gaia_DR3_<id>_keplerian_residuals.png` | Residuals vs RV-only fit (±5 km/s cap) |
+| `Gaia_DR3_<id>_keplerian_fit.png` | Four fits + all epochs (lit + ours); no legend/text |
+| `Gaia_DR3_<id>_keplerian_residuals.png` | Same top panel + residuals (±5 km/s) + fit P, e, M₂ sin i |
 | `Gaia_DR3_<id>_28_hbeta.png` | All epochs on one axes (viridis by MJD) |
 | Table **RV Fit** thumb | `RV_Fit/<id>_keplerian_fit.png` (fits only) |
 | Table **RV Fit** click | `Plots/<id>_keplerian_residuals.png` (fits + residuals) |
