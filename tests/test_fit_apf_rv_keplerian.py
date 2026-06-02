@@ -124,11 +124,8 @@ def test_parse_summary_counts_nan_rv_epochs(tmp_path: Path) -> None:
         "Gaia_DR3_1702370142434513152_epoch_8.txt 60716.36 -9.54 0.72 1.40 False\n"
     )
     pts = fitmod.parse_summary(flat)
-    assert len(pts) == 8
-    t = np.array([p.mjd for p in pts])
-    y = np.array([p.rv for p in pts])
-    ok = np.isfinite(t) & np.isfinite(y)
-    assert ok.sum() == 6
+    assert len(pts) == 6
+    assert all(np.isfinite(p.rv) for p in pts)
 
 
 def test_report_stem_uses_numeric_id(tmp_path: Path) -> None:
@@ -161,6 +158,33 @@ def test_fit_keplerian_clips_initial_guess() -> None:
     yerr = np.full_like(t, 0.2)
     params, _ = fitmod.fit_keplerian(t, y, yerr, period_prior=1e6, period_prior_sigma=0.15)
     assert np.all(np.isfinite(params))
+
+
+def test_parse_summary_excludes_legacy_sentinel_rv(tmp_path: Path) -> None:
+    summ = tmp_path / "Gaia_DR3_958479989998172288_summary.txt"
+    summ.write_text(
+        "[PIPELINE RESULTS]\n"
+        "# File | MJD | RV | Err | RMS\n"
+        "f1.txt 60000.0 -10.0 0.1 0.2\n"
+        "f2.txt 60010.0 -9999.0 0.1 0.2\n"
+        "f3.txt 60020.0 -10.5 0.1 0.2\n"
+        "f4.txt 60030.0 -11.0 0.1 0.2\n"
+        "f5.txt 60040.0 -10.2 0.1 0.2\n"
+    )
+    pts = fitmod.parse_summary(summ)
+    rvs = [p.rv for p in pts]
+    assert -9999.0 not in rvs
+    assert len(pts) == 4
+
+
+def test_fit_all_variants_includes_four_when_nss_present() -> None:
+    t = np.linspace(60000, 60100, 12)
+    y = 10.0 * np.sin(2 * np.pi * t / 20.0) + np.random.default_rng(0).normal(0, 0.2, t.size)
+    yerr = np.full_like(y, 0.25)
+    nss = {"period_days": 20.0, "eccentricity": 0.1}
+    variants = fitmod.fit_all_variants(t, y, yerr, nss, period_min=5.0, period_max=200.0, period_prior_sigma=0.2)
+    assert "free" in variants
+    assert len(variants) == 4
 
 
 def test_parse_summary_includes_external_rvs(tmp_path: Path) -> None:

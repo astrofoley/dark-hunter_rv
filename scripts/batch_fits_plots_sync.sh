@@ -26,6 +26,8 @@ REPORTS_DIR="${REPORTS_DIR:-$REPO/rv_fit_reports}"
 LOG="${LOG:-$REPO/batch_fits_plots_sync.log}"
 MIN_POINTS="${MIN_POINTS:-7}"
 RUN_FITS="${RUN_FITS:-1}"
+RUN_RV_PLOTS="${RUN_RV_PLOTS:-1}"
+RUN_HBETA_PLOTS="${RUN_HBETA_PLOTS:-1}"
 FIT_FORCE="${FIT_FORCE:-1}"
 QUERY_GAIA_ONLINE="${QUERY_GAIA_ONLINE:-0}"
 DRY_RUN="${DRY_RUN:-0}"
@@ -131,17 +133,31 @@ else
   echo "=== Keplerian fits (skipped: RUN_FITS=0) ==="
 fi
 
-echo "=== Summary-based RV plots (no pipeline rerun) ==="
-plot_args=(
-  scripts/plot_rv_from_summaries.py
-  --summary-dir "$OUT"
-  --plots-root "$OUT"
-  --reports-dir "$REPORTS_DIR"
-)
-if [[ -n "$STAR_ID" ]]; then
-  plot_args+=(--star-id "$STAR_ID")
+if [[ "$RUN_RV_PLOTS" == "1" && "$RUN_FITS" != "1" ]]; then
+  echo "=== Summary-based RV data plots (no fits) ==="
+  plot_args=(
+    scripts/plot_rv_from_summaries.py
+    --summary-dir "$OUT"
+    --plots-root "$OUT"
+  )
+  if [[ -n "$STAR_ID" ]]; then
+    plot_args+=(--star-id "$STAR_ID")
+  fi
+  run_cmd "$PY" "${plot_args[@]}"
 fi
-run_cmd "$PY" "${plot_args[@]}"
+
+if [[ "$RUN_HBETA_PLOTS" == "1" ]]; then
+  echo "=== Hβ epoch stack plots for website ==="
+  hbeta_args=(
+    scripts/build_hbeta_website_plots.py
+    --summary-dir "$OUT"
+    --plots-root "$OUT"
+  )
+  if [[ -n "$STAR_ID" ]]; then
+    hbeta_args+=(--star-id "$STAR_ID")
+  fi
+  run_cmd "$PY" "${hbeta_args[@]}"
+fi
 
 echo "=== Stage website files into stars/Gaia_DR3_<id>/Gaia/... ==="
 staged_stars=0
@@ -225,13 +241,21 @@ try:
 except ValueError as exc:
     raise SystemExit(f"Required data.csv column missing: {exc}")
 
-# Add requested derived-mass columns when missing.
 col_m2sini = "M2sin i (Msun)"
 col_m2over = "(M2sin i)/(sin i) (Msun)"
-if col_m2sini not in hdr:
-    hdr.append(col_m2sini)
-if col_m2over not in hdr:
-    hdr.append(col_m2over)
+for col in (col_m2sini, col_m2over):
+    if col not in hdr:
+        hdr.append(col)
+# Place M2sin i and M2 at i immediately after Dark M2.
+col_m2 = "M2 (Msun)"
+if col_m2 in hdr:
+    m2_idx = hdr.index(col_m2)
+    for extra in (col_m2sini, col_m2over):
+        if extra in hdr:
+            hdr.remove(extra)
+    insert_at = m2_idx + 1
+    hdr.insert(insert_at, col_m2sini)
+    hdr.insert(insert_at + 1, col_m2over)
 for r in rows[1:]:
     while len(r) < len(hdr):
         r.append("")

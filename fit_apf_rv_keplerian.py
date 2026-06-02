@@ -421,11 +421,19 @@ def parse_summary(path: Path) -> List[RVPoint]:
         if len(parts) < 5:
             continue
         try:
+            rv = float(parts[2])
+        except ValueError:
+            continue
+        from darkhunter_rv.rv_point_filters import rv_value_is_valid
+
+        if not rv_value_is_valid(rv):
+            continue
+        try:
             points.append(
                 RVPoint(
                     file=parts[0],
                     mjd=float(parts[1]),
-                    rv=float(parts[2]),
+                    rv=rv,
                     rv_err=max(float(parts[3]), 1e-4),
                     rms=max(abs(float(parts[4])), 1e-4),
                     telescope=_pipeline_telescope_from_filename(parts[0]),
@@ -449,7 +457,9 @@ def parse_summary(path: Path) -> List[RVPoint]:
             tel = str(r.get("telescope", "LITERATURE") or "LITERATURE")
         except Exception:
             continue
-        if not np.isfinite(mjd) or not np.isfinite(rv):
+        from darkhunter_rv.rv_point_filters import rv_value_is_valid
+
+        if not np.isfinite(mjd) or not rv_value_is_valid(rv):
             continue
         if not np.isfinite(rv_err) or rv_err <= 0:
             rv_err = 1.0
@@ -824,6 +834,63 @@ def solve_m2_with_inclination_msun(f_mass: float, m1: float, inclination_deg: fl
     return float(out) if np.isfinite(out) and out > 0 else None
 
 
+def fit_all_variants(
+    t: np.ndarray,
+    y: np.ndarray,
+    yerr: np.ndarray,
+    gaia_nss: Optional[Dict[str, float]],
+    *,
+    period_min: Optional[float],
+    period_max: Optional[float],
+    period_prior_sigma: float,
+) -> Dict[str, Tuple[np.ndarray, dict]]:
+    """Four Keplerian fits: free P/e; fixed P; fixed e; fixed P and e (Gaia when available)."""
+    out: Dict[str, Tuple[np.ndarray, dict]] = {}
+    nss_p = None
+    nss_e = None
+    if gaia_nss is not None:
+        nss_p = gaia_nss.get("period_days")
+        nss_e = gaia_nss.get("eccentricity")
+
+    specs: List[Tuple[str, Optional[float], Optional[float]]] = [
+        ("free", None, None),
+    ]
+    if nss_p is not None and nss_e is not None and nss_p > 0 and 0 <= nss_e < 1:
+        specs.extend(
+            [
+                ("fix_period", float(nss_p), None),
+                ("fix_ecc", None, float(nss_e)),
+                ("fix_period_ecc", float(nss_p), float(nss_e)),
+            ]
+        )
+
+    for key, fix_p, fix_e in specs:
+        try:
+            params, rep = fit_keplerian(
+                t,
+                y,
+                yerr,
+                period_min=period_min,
+                period_max=period_max,
+                period_prior=None,
+                period_prior_sigma=period_prior_sigma,
+                fix_period=fix_p,
+                fix_e=fix_e,
+            )
+        except (ValueError, RuntimeError):
+            continue
+        rep["fit_variant"] = key
+        rep["mass_function_msun"] = float(
+            mass_function_msun(rep["P_days"], rep["K_kms"], rep["e"])
+        )
+        if fix_p is not None:
+            rep["fixed_period_days"] = float(fix_p)
+        if fix_e is not None:
+            rep["fixed_eccentricity"] = float(fix_e)
+        out[key] = (params, rep)
+    return out
+
+
 def build_plot(
     summary_path: Path,
     points: List[RVPoint],
@@ -1152,7 +1219,15 @@ def run_one(
     gaia_cache_path: Optional[Path],
     observability_cache_path: Optional[Path],
     query_gaia_online: bool,
+    plots_root: Optional[Path] = None,
 ) -> Optional[dict]:
+    from darkhunter_rv.rv_keplerian_plots import (
+        our_telescope_points,
+        plot_fit_residuals,
+        plot_multi_fit,
+        plot_rv_data_only,
+    )
+
     points = parse_summary(summary_path)
     n_epochs = len(points)
     if n_epochs < min_points:
@@ -1196,16 +1271,10 @@ def run_one(
             if gaia_nss is not None:
                 nss_source = "online"
 
-    fit_period_prior = period_prior
-    fit_fix_e = fix_e
     fit_m1_msun = m1_msun
     fit_m2_msun = None
     fit_inclination_deg = None
     if gaia_nss is not None:
-        if fit_period_prior is None:
-            fit_period_prior = gaia_nss.get("period_days")
-        if fit_fix_e is None:
-            fit_fix_e = gaia_nss.get("eccentricity")
         if fit_m1_msun is None:
             fit_m1_msun = gaia_nss.get("m1_msun")
         fit_m2_msun = gaia_nss.get("m2_msun")
@@ -1213,32 +1282,32 @@ def run_one(
     if fit_m1_msun is None:
         fit_m1_msun = parse_m1_from_summary(summary_path)
 
-    try:
-        params, report = fit_keplerian(
-            t,
-            y,
-            yerr,
-            period_min=period_min,
-            period_max=period_max,
-            period_prior=fit_period_prior,
-            period_prior_sigma=period_prior_sigma,
-            fix_period=fix_period,
-            fix_e=fit_fix_e,
-        )
-    except (ValueError, RuntimeError) as exc:
-        print(f"[SKIP] {summary_path.name}: fit failed ({exc})")
+    fit_variants = fit_all_variants(
+        t,
+        y,
+        yerr,
+        gaia_nss if use_gaia_nss else None,
+        period_min=period_min,
+        period_max=period_max,
+        period_prior_sigma=period_prior_sigma,
+    )
+    if "free" not in fit_variants:
+        print(f"[SKIP] {summary_path.name}: free RV fit failed")
         return None
 
+    params, report = fit_variants["free"]
     report["summary_file"] = str(summary_path)
     report["gaia_source_id"] = gaia_source_id
     report["gaia_nss"] = gaia_nss
     report["nss_priors_source"] = nss_source
     report["observability_window"] = load_observability_window(gaia_source_id, observability_cache_path)
-    report["used_gaia_period_prior"] = fit_period_prior if gaia_nss is not None else None
-    report["used_gaia_eccentricity"] = fit_fix_e if gaia_nss is not None else None
+    report["fit_variants"] = {k: v[1] for k, v in fit_variants.items()}
+    report["params_by_variant"] = {k: np.asarray(v[0], dtype=float).tolist() for k, v in fit_variants.items()}
 
     stem = report_stem(summary_path, gaia_source_id)
     out_png = out_dir / f"{stem}_keplerian_fit.png"
+    data_png = out_dir / f"{stem}_rv_data.png"
+    resid_png = out_dir / f"{stem}_keplerian_residuals.png"
     out_json = out_dir / f"{stem}_keplerian_fit.json"
 
     report["used_m1_msun"] = None if fit_m1_msun is None else float(fit_m1_msun)
@@ -1247,8 +1316,8 @@ def run_one(
         None if fit_inclination_deg is None else float(fit_inclination_deg)
     )
 
-    f_mass = mass_function_msun(report["P_days"], report["K_kms"], report["e"])
-    report["mass_function_msun"] = float(f_mass)
+    f_mass = float(report.get("mass_function_msun", mass_function_msun(report["P_days"], report["K_kms"], report["e"])))
+    report["mass_function_msun"] = f_mass
     m2sini = None
     if fit_m1_msun is not None and np.isfinite(fit_m1_msun) and fit_m1_msun > 0:
         m2sini = solve_m2sini_msun(f_mass, float(fit_m1_msun))
@@ -1267,7 +1336,23 @@ def run_one(
         )
     report["m2_given_inclination_msun"] = None if m2_incl is None else float(m2_incl)
 
-    build_plot(summary_path, points_fit, params, report, out_png, m1_msun=fit_m1_msun)
+    plot_multi_fit(summary_path, points_fit, fit_variants, report, out_png, m1_msun=fit_m1_msun)
+    plot_fit_residuals(summary_path, points_fit, fit_variants, report, resid_png)
+    ours = our_telescope_points(points_fit)
+    if len(ours) >= 2:
+        plot_rv_data_only(summary_path, ours, report, data_png)
+
+    if plots_root is not None and gaia_source_id:
+        import shutil
+
+        star_dir = plots_root / f"Gaia_DR3_{gaia_source_id}"
+        star_dir.mkdir(parents=True, exist_ok=True)
+        if data_png.is_file():
+            shutil.copy2(data_png, star_dir / f"Gaia_DR3_{gaia_source_id}_rv_plot.png")
+        shutil.copy2(out_png, star_dir / f"Gaia_DR3_{gaia_source_id}_keplerian_fit.png")
+        if resid_png.is_file():
+            shutil.copy2(resid_png, star_dir / f"Gaia_DR3_{gaia_source_id}_keplerian_residuals.png")
+
     out_json.write_text(json.dumps(report, indent=2))
     return report
 
@@ -1389,7 +1474,8 @@ def main() -> None:
             args.use_gaia_nss,
             gaia_cache_path,
             observability_cache_path,
-            args.query_gaia_online,
+            args.            query_gaia_online,
+            plots_root=output_dir,
         )
         if report is None:
             skipped += 1
