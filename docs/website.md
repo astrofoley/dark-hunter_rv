@@ -114,22 +114,30 @@ WEB_ROOT=/var/www/html/darkhunter/rv RUN_FITS=0 RUN_RV_PLOTS=1 MIN_POINTS=5 \
   bash scripts/populate_website.sh
 ```
 
-**Symptoms without a full deploy:** RV thumbnails under **M2 sin i** (stray `<img>` in `data.csv`), correct RV plots only in **RV Curve** (new `script.js`), no **H-beta** (PNGs missing or not built). Run the repair block below.
+**Symptoms without a full deploy:** RV thumbnails under **M2 sin i** (stray `<img>` in `data.csv`), correct RV plots only in **RV Curve** (new `script.js`), no **H-beta** (PNGs missing or not built).
 
-**Repair shifted columns / stale embedded `<img>` in `data.csv`** (after a bad populate, or once after upgrading):
+### Step 1 — Repair table + frontend only (fast, no refit)
 
 ```bash
 cd /data2/darkhunter/dark-hunter_rv
 git pull
-bash scripts/setup_website.sh
-PYTHONPATH=. python3 scripts/fix_data_csv_column_order.py \
-  --data-csv /var/www/html/darkhunter/rv/tables/data.csv
-WEB_ROOT=/var/www/html/darkhunter/rv RUN_FITS=0 RUN_HBETA_PLOTS=1 \
-  SPEC_ROOT=/data2/gaia_stars/apf_reductions \
-  bash scripts/populate_website.sh
+bash scripts/repair_website_table.sh
 ```
 
-Hard-refresh the browser once (`script.js` builds plot URLs from Gaia ID; thumbnails use a per-load cache-bust query).
+Hard-refresh the browser (Cmd+Shift+R). This deploys `script.js`, fixes column alignment, clears stray plot HTML, and fills **DAYS SINCE LAST APF** / mass / **NEXT RV EVENT** from existing summaries and `rv_fit_reports` JSON if they are already on disk.
+
+### Step 2 — Full refresh when ready (long: refit + all plots + Hβ + staging)
+
+```bash
+bash scripts/full_website_refresh.sh
+```
+
+CSV-only normalize (no column value fill):
+
+```bash
+PYTHONPATH=. python3 scripts/fix_data_csv_column_order.py \
+  --data-csv /var/www/html/darkhunter/rv/tables/data.csv
+```
 
 Hβ overlays read spectra under `SPEC_ROOT` (not per-epoch pipeline PNGs). Build alone:
 
