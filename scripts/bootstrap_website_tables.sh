@@ -56,7 +56,12 @@ rows = list(csv.reader(path.open(newline="", encoding="utf-8")))
 if not rows:
     raise SystemExit("empty data.csv")
 hdr = rows[0]
-for col in ("M2sin i (Msun)", "(M2sin i)/(sin i) (Msun)"):
+for col in (
+    "M2sin i (Msun)",
+    "(M2sin i)/(sin i) (Msun)",
+    "DAYS SINCE LAST APF",
+    "NEXT RV EVENT (MJD)",
+):
     if col not in hdr:
         hdr.append(col)
         for r in rows[1:]:

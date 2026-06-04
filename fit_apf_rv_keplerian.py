@@ -425,15 +425,19 @@ def parse_summary(path: Path) -> List[RVPoint]:
             rv = float(parts[2])
         except ValueError:
             continue
-        from darkhunter_rv.rv_point_filters import rv_value_is_valid
+        from darkhunter_rv.rv_point_filters import rv_epoch_is_valid
 
-        if not rv_value_is_valid(rv):
+        try:
+            mjd = float(parts[1])
+        except ValueError:
+            continue
+        if not rv_epoch_is_valid(mjd, rv):
             continue
         try:
             points.append(
                 RVPoint(
                     file=parts[0],
-                    mjd=float(parts[1]),
+                    mjd=mjd,
                     rv=rv,
                     rv_err=max(float(parts[3]), 1e-4),
                     rms=max(abs(float(parts[4])), 1e-4),
@@ -458,9 +462,9 @@ def parse_summary(path: Path) -> List[RVPoint]:
             tel = str(r.get("telescope", "LITERATURE") or "LITERATURE")
         except Exception:
             continue
-        from darkhunter_rv.rv_point_filters import rv_value_is_valid
+        from darkhunter_rv.rv_point_filters import rv_epoch_is_valid
 
-        if not np.isfinite(mjd) or not rv_value_is_valid(rv):
+        if not rv_epoch_is_valid(mjd, rv):
             continue
         if not np.isfinite(rv_err) or rv_err <= 0:
             rv_err = 1.0
