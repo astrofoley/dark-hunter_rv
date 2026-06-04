@@ -11,9 +11,11 @@ from pathlib import Path
 from fit_apf_rv_keplerian import website_table_masses_from_report
 from darkhunter_rv.website_table_csv import (
     days_since_last_apf_from_summary,
+    format_next_rv_event_cell,
     gaia_id_from_row,
     next_rv_event_from_fit_report,
     normalize_data_csv,
+    parse_next_rv_cell_to_mjd,
 )
 
 
@@ -38,7 +40,7 @@ def update_table_columns(
     m2sini_i = hdr.index("M2sin i (Msun)")
     m2over_i = hdr.index("(M2sin i)/(sin i) (Msun)")
     apf_days_i = hdr.index("DAYS SINCE LAST APF")
-    next_rv_i = hdr.index("NEXT RV EVENT (MJD)")
+    next_rv_i = hdr.index("NEXT RV EVENT (DATE)")
 
     reports: dict[str, dict] = {}
     if reports_dir.is_dir():
@@ -90,8 +92,15 @@ def update_table_columns(
         if nxt is not None:
             while len(r) <= next_rv_i:
                 r.append("")
-            r[next_rv_i] = f"{nxt:.3f}"
+            r[next_rv_i] = format_next_rv_event_cell(nxt)
             n_next += 1
+
+    for r in data_rows:
+        if not r or next_rv_i >= len(r) or not r[next_rv_i]:
+            continue
+        mjd = parse_next_rv_cell_to_mjd(r[next_rv_i])
+        if mjd is not None and "/" not in r[next_rv_i]:
+            r[next_rv_i] = format_next_rv_event_cell(mjd)
 
     with data_csv.open("w", newline="", encoding="utf-8") as fh:
         csv.writer(fh).writerows(rows)

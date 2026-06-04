@@ -218,9 +218,11 @@ from pathlib import Path
 from fit_apf_rv_keplerian import website_table_masses_from_report
 from darkhunter_rv.website_table_csv import (
     days_since_last_apf_from_summary,
+    format_next_rv_event_cell,
     gaia_id_from_row,
     next_rv_event_from_fit_report,
     normalize_data_csv,
+    parse_next_rv_cell_to_mjd,
 )
 
 report_dir = Path(os.environ["REPORTS_DIR"])
@@ -258,7 +260,7 @@ normalize_data_csv(hdr, data_rows)
 col_m2sini = "M2sin i (Msun)"
 col_m2over = "(M2sin i)/(sin i) (Msun)"
 col_apf_days = "DAYS SINCE LAST APF"
-col_next_rv = "NEXT RV EVENT (MJD)"
+col_next_rv = "NEXT RV EVENT (DATE)"
 m2sini_i = hdr.index(col_m2sini)
 m2over_i = hdr.index(col_m2over)
 apf_days_i = hdr.index(col_apf_days)
@@ -304,7 +306,7 @@ for r in data_rows:
         if nxt is not None:
             while len(r) <= next_rv_i:
                 r.append("")
-            r[next_rv_i] = f"{nxt:.3f}"
+            r[next_rv_i] = format_next_rv_event_cell(nxt)
 
 with data_csv.open("w", newline="", encoding="utf-8") as fh:
     writer = csv.writer(fh)
