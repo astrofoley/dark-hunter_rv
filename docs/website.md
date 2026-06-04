@@ -62,7 +62,15 @@ Ensure Apache serves `/var/www/html/darkhunter/rv/` (existing `Alias` or symlink
 | Table **RV Fit** thumb | `RV_Fit/<id>_keplerian_fit.png` (fits only) |
 | Table **RV Fit** click | `Plots/<id>_keplerian_residuals.png` (fits + residuals) |
 
-**Mass columns in `tables/data.csv`** (from `*_keplerian_fit.json` after a fit pass):
+**Table columns** (from `*_keplerian_fit.json` and summaries after a fit pass):
+
+| Column | Meaning |
+|--------|---------|
+| **DATA PRODUCTS** | Link to `stars/Gaia_DR3_<id>/Gaia/` (Apache directory listing) |
+| **DAYS SINCE LAST APF** | Days since latest APF pipeline epoch (sortable; drives &lt;7d / &lt;30d filters) |
+| **NEXT RV EVENT (MJD)** | Sooner of next max/min RV from **P & e fixed** fit (Gaia NSS) |
+
+**Mass columns:**
 
 | Column | Meaning |
 |--------|---------|

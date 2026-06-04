@@ -208,7 +208,7 @@ for summ in "${SUMMARY_FILES[@]}"; do
 done
 
 if [[ "$DRY_RUN" != "1" ]]; then
-  export REPORTS_DIR DATA_CSV MISSING_ASSETS_CSV STAGED_SUMMARY
+  export REPORTS_DIR DATA_CSV MISSING_ASSETS_CSV STAGED_SUMMARY OUT
   "$PY" - <<'PY'
 import csv
 import json
@@ -216,8 +216,15 @@ import os
 from pathlib import Path
 
 from fit_apf_rv_keplerian import website_table_masses_from_report
+from darkhunter_rv.website_table_csv import (
+    days_since_last_apf_from_summary,
+    gaia_id_from_row,
+    next_rv_event_from_fit_report,
+    normalize_data_csv,
+)
 
 report_dir = Path(os.environ["REPORTS_DIR"])
+out_dir = Path(os.environ.get("OUT", report_dir.parent / "output"))
 data_csv = Path(os.environ["DATA_CSV"])
 missing_csv = Path(os.environ["MISSING_ASSETS_CSV"])
 summary_json = Path(os.environ["STAGED_SUMMARY"])
@@ -245,91 +252,59 @@ try:
 except ValueError as exc:
     raise SystemExit(f"Required data.csv column missing: {exc}")
 
+data_rows = rows[1:]
+normalize_data_csv(hdr, data_rows)
+
 col_m2sini = "M2sin i (Msun)"
 col_m2over = "(M2sin i)/(sin i) (Msun)"
-for col in (col_m2sini, col_m2over):
-    if col not in hdr:
-        hdr.append(col)
-for r in rows[1:]:
-    while len(r) < len(hdr):
-        r.append("")
-
-def move_columns_after(hdr, rows, names, after):
-    if after not in hdr:
-        return
-    insert_at = hdr.index(after) + 1
-    moving = [(hdr.index(name), name) for name in names if name in hdr]
-    if not moving:
-        return
-    extracted = []
-    for old_i, name in sorted(moving, key=lambda x: x[0], reverse=True):
-        hdr.pop(old_i)
-        col_vals = [r.pop(old_i) if old_i < len(r) else "" for r in rows]
-        extracted.append((name, list(reversed(col_vals))))
-    extracted.reverse()
-    for offset, (name, col_vals) in enumerate(extracted):
-        hdr.insert(insert_at + offset, name)
-        for r, val in zip(rows, col_vals):
-            r.insert(insert_at + offset, val)
-
-MEDIA_COLUMNS = frozenset({"RV PLOT", "RV FIT", "FLUX PLOT", "SOURCE IMAGE"})
-
-def clear_media_cells(hdr, rows):
-    for name in MEDIA_COLUMNS:
-        if name not in hdr:
-            continue
-        ci = hdr.index(name)
-        for r in rows:
-            while len(r) <= ci:
-                r.append("")
-            r[ci] = ""
-
-def clear_stray_plot_html(hdr, rows):
-    for ci, name in enumerate(hdr):
-        if name in MEDIA_COLUMNS:
-            continue
-        for r in rows:
-            while len(r) <= ci:
-                r.append("")
-            if r[ci] and "<img" in r[ci].lower():
-                r[ci] = ""
-
-move_columns_after(hdr, rows[1:], [col_m2sini, col_m2over], "M2 (Msun)")
-clear_media_cells(hdr, rows[1:])
-clear_stray_plot_html(hdr, rows[1:])
+col_apf_days = "DAYS SINCE LAST APF"
+col_next_rv = "NEXT RV EVENT (MJD)"
 m2sini_i = hdr.index(col_m2sini)
 m2over_i = hdr.index(col_m2over)
+apf_days_i = hdr.index(col_apf_days)
+next_rv_i = hdr.index(col_next_rv)
 
 updated = 0
-for r in rows[1:]:
+for r in data_rows:
     if not r:
         continue
     gaia = (r[gaia_i] if gaia_i < len(r) else "").strip()
-    sid = ""
-    import re
-    m = re.search(r"(\d{8,})", gaia)
-    if m:
-        sid = m.group(1)
-    if not sid or sid not in reports:
+    sid = gaia_id_from_row(gaia)
+    if not sid:
         continue
-    rep = reports[sid]
-    masses = website_table_masses_from_report(rep)
-    m2_astro = masses["m2_msun"]
-    m2s = masses["m2sin_i_msun"]
-    m2i = masses["m2_at_i_msun"]
-    if m2_astro is not None:
-        while len(r) <= m2_i:
-            r.append("")
-        r[m2_i] = f"{m2_astro:.5f}"
-        updated += 1
-    if m2s is not None:
-        while len(r) <= m2sini_i:
-            r.append("")
-        r[m2sini_i] = f"{m2s:.5f}"
-    if m2i is not None:
-        while len(r) <= m2over_i:
-            r.append("")
-        r[m2over_i] = f"{m2i:.5f}"
+
+    summ = out_dir / f"Gaia_DR3_{sid}_summary.txt"
+    if summ.is_file():
+        age = days_since_last_apf_from_summary(summ)
+        if age is not None:
+            while len(r) <= apf_days_i:
+                r.append("")
+            r[apf_days_i] = f"{age:.2f}"
+
+    if sid in reports:
+        rep = reports[sid]
+        masses = website_table_masses_from_report(rep)
+        m2_astro = masses["m2_msun"]
+        m2s = masses["m2sin_i_msun"]
+        m2i = masses["m2_at_i_msun"]
+        if m2_astro is not None:
+            while len(r) <= m2_i:
+                r.append("")
+            r[m2_i] = f"{m2_astro:.5f}"
+            updated += 1
+        if m2s is not None:
+            while len(r) <= m2sini_i:
+                r.append("")
+            r[m2sini_i] = f"{m2s:.5f}"
+        if m2i is not None:
+            while len(r) <= m2over_i:
+                r.append("")
+            r[m2over_i] = f"{m2i:.5f}"
+        nxt = next_rv_event_from_fit_report(rep)
+        if nxt is not None:
+            while len(r) <= next_rv_i:
+                r.append("")
+            r[next_rv_i] = f"{nxt:.3f}"
 
 with data_csv.open("w", newline="", encoding="utf-8") as fh:
     writer = csv.writer(fh)

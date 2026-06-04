@@ -1,4 +1,4 @@
-from darkhunter_rv.rv_point_filters import rv_value_is_valid
+from darkhunter_rv.rv_point_filters import mjd_is_valid, rv_value_is_valid
 
 
 def test_rejects_legacy_sentinel() -> None:
@@ -9,3 +9,7 @@ def test_rejects_legacy_sentinel() -> None:
 def test_accepts_normal_rv() -> None:
     assert rv_value_is_valid(-15.5)
     assert rv_value_is_valid(120.0)
+
+
+def test_rejects_mjd_zero() -> None:
+    assert not mjd_is_valid(0.0)

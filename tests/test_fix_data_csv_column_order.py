@@ -1,25 +1,20 @@
-import importlib.util
-from pathlib import Path
-
-_ROOT = Path(__file__).resolve().parents[1]
-_spec = importlib.util.spec_from_file_location(
-    "fix_data_csv_column_order",
-    _ROOT / "scripts" / "fix_data_csv_column_order.py",
+from darkhunter_rv.website_table_csv import (
+    clear_media_cells,
+    clear_stray_plot_html,
+    normalize_data_csv,
 )
-_mod = importlib.util.module_from_spec(_spec)
-assert _spec.loader is not None
-_spec.loader.exec_module(_mod)
-move_columns_after = _mod.move_columns_after
-clear_media_cells = _mod.clear_media_cells
-clear_stray_plot_html = _mod.clear_stray_plot_html
 
 
-def test_move_columns_after_reorders_row_values(tmp_path: Path) -> None:
-    hdr = ["GAIA NAME", "M2 (Msun)", "RV PLOT", "M2sin i (Msun)", "RV FIT"]
-    data = ["id1", "1.0", "<img rv>", "2.0", "<img fit>"]
-    move_columns_after(hdr, [data], ["M2sin i (Msun)"], "M2 (Msun)")
-    assert hdr == ["GAIA NAME", "M2 (Msun)", "M2sin i (Msun)", "RV PLOT", "RV FIT"]
-    assert data == ["id1", "1.0", "2.0", "<img rv>", "<img fit>"]
+def test_normalize_data_csv_reorders_mass_and_clears_stray_img() -> None:
+    hdr = ["GAIA NAME", "M2 (Msun)", "RV PLOT", "M2sin i (Msun)", "RV FIT", "FLUX PLOT"]
+    data = ["id1", "1.0", "<img rv>", "2.0", "<img fit>", "<img hbeta>"]
+    rows = [data]
+    _, n_stray = normalize_data_csv(hdr, rows)
+    assert hdr.index("M2sin i (Msun)") == hdr.index("M2 (Msun)") + 1
+    assert rows[0][hdr.index("M2sin i (Msun)")] == "2.0"
+    assert rows[0][hdr.index("RV PLOT")] == ""
+    assert data[hdr.index("RV PLOT")] == ""
+    assert n_stray >= 0
 
 
 def test_clear_stray_plot_html_in_mass_column() -> None:
@@ -30,7 +25,7 @@ def test_clear_stray_plot_html_in_mass_column() -> None:
     assert data[0] == "1.0"
 
 
-def test_clear_media_cells(tmp_path: Path) -> None:
+def test_clear_media_cells() -> None:
     hdr = ["RV PLOT", "M2 (Msun)"]
     data = ["<img>", "1.0"]
     clear_media_cells(hdr, [data])

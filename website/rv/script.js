@@ -55,6 +55,8 @@ const headerDisplayMap = {
     "FLUX PLOT": "H-beta",
     "SOURCE IMAGE": "UV Image",
     "DATA PRODUCTS": "Data Products",
+    "DAYS SINCE LAST APF": "Days since<br>last APF",
+    "NEXT RV EVENT (MJD)": "Next RV<br>min/max (MJD)",
     "BROAD LINES (HOT STAR/RAPID ROTATION)": "Broad lines",
     "COMPLETE ORBIT/MINIMA TO MAXIMA": "Complete orbit now",
     "JERK STAR": "Jerk star",
@@ -404,6 +406,43 @@ function rebuildColumnIndex(headerRow) {
 
 function colIndex(headerName) {
     return Object.prototype.hasOwnProperty.call(colByHeader, headerName) ? colByHeader[headerName] : -1;
+}
+
+const NUMERIC_TABLE_HEADERS = new Set(["DAYS SINCE LAST APF", "NEXT RV EVENT (MJD)"]);
+
+function cellAtColumn(row, headerName) {
+    const idx = colIndex(headerName);
+    if (idx < 0) {
+        return null;
+    }
+    const cells = row.getElementsByTagName("td");
+    return cells[idx] || null;
+}
+
+function rowHasPlotInColumn(row, headerName) {
+    const cell = cellAtColumn(row, headerName);
+    if (!cell) {
+        return false;
+    }
+    return !!cell.querySelector("img");
+}
+
+function applyApfDaysDataset(row, rawValue) {
+    const days = parseFloat(String(rawValue ?? "").trim());
+    if (!Number.isFinite(days)) {
+        return;
+    }
+    row.dataset.apfAgeDays = String(days);
+    row.dataset.apfRecent = days <= RECENT_APF_DAYS ? "1" : "0";
+    row.dataset.apfRecentWeek = days <= RECENT_WEEK_DAYS ? "1" : "0";
+    row.dataset.apfChecked = "1";
+}
+
+function setCellHtmlForColumn(row, headerName, html) {
+    const cell = cellAtColumn(row, headerName);
+    if (cell) {
+        cell.innerHTML = html;
+    }
 }
 
 function headerNameForIndex(colIdx) {
@@ -758,13 +797,13 @@ function rowMatchesFilters(row) {
     const recentApfWeekToggle = document.getElementById("toggle-recent-apf-week");
     const recentKeckWeekToggle = document.getElementById("toggle-recent-keck-week");
 
-    if (rvToggle && rvToggle.checked && !hasMedia(cells[10])) {
+    if (rvToggle && rvToggle.checked && !rowHasPlotInColumn(row, "RV PLOT")) {
         return false;
     }
-    if (fluxToggle && fluxToggle.checked && !hasMedia(cells[12])) {
+    if (fluxToggle && fluxToggle.checked && !rowHasPlotInColumn(row, "FLUX PLOT")) {
         return false;
     }
-    if (sourceToggle && sourceToggle.checked && !hasMedia(cells[13])) {
+    if (sourceToggle && sourceToggle.checked && !rowHasPlotInColumn(row, "SOURCE IMAGE")) {
         return false;
     }
     if (apfToggle && apfToggle.checked && row.dataset.hasApf !== "1") {
@@ -833,10 +872,9 @@ function updateToggleCounts(baseRows) {
     let recentKeckWeek = 0;
     const yesNoTotals = YES_NO_PARAMS.map(() => ({ Y: 0, N: 0 }));
     for (let i = 0; i < baseRows.length; i++) {
-        const cells = baseRows[i].getElementsByTagName("td");
-        if (hasMedia(cells[10])) rv += 1;
-        if (hasMedia(cells[12])) flux += 1;
-        if (hasMedia(cells[13])) source += 1;
+        if (rowHasPlotInColumn(baseRows[i], "RV PLOT")) rv += 1;
+        if (rowHasPlotInColumn(baseRows[i], "FLUX PLOT")) flux += 1;
+        if (rowHasPlotInColumn(baseRows[i], "SOURCE IMAGE")) source += 1;
         if (baseRows[i].dataset.hasApf === "1") apf += 1;
         if (baseRows[i].dataset.apfRecent === "1") recent += 1;
         if (baseRows[i].dataset.apfRecentWeek === "1") recentApfWeek += 1;
@@ -865,49 +903,21 @@ function updateToggleCounts(baseRows) {
 }
 
 function renderDataProductsCell(row) {
-    const base = row.dataset.starBase || "";
-    if (!base) {
+    const gaiaId = row.dataset.gaiaId || "";
+    if (!gaiaId) {
         return "N/A";
     }
+    const base = `stars/Gaia_DR3_${gaiaId}`;
     const apfUrl = `${base}/Gaia/`;
     const swiftUrl = `${base}/Swift/`;
     const keckUrl = `${base}/Keck/`;
-    const hasApf = row.dataset.hasApf !== "0";
     const hasSwift = row.dataset.hasSwift === "1";
     const hasKeck = row.dataset.hasKeck === "1";
-    const apfRecent = row.dataset.apfRecent || "unknown";
-    const apfChecked = row.dataset.apfChecked === "1";
-    const apfAgeDays = parseFloat(row.dataset.apfAgeDays || "");
-    const keckRecent = row.dataset.keckRecent || "unknown";
-    const keckChecked = row.dataset.keckChecked === "1";
-    const keckAgeDays = parseFloat(row.dataset.keckAgeDays || "");
-    let apfStateClass = "apf-unknown";
-    let apfStateText = "";
-    if (apfChecked && Number.isFinite(apfAgeDays)) {
-        if (apfRecent === "1") {
-            apfStateClass = "apf-recent";
-        } else if (apfRecent === "0") {
-            apfStateClass = "apf-old";
-        }
-        apfStateText = `last epoch ${Math.round(apfAgeDays)} d ago`;
-    }
-    let keckStateClass = "apf-unknown";
-    let keckStateText = "";
-    if (keckChecked && Number.isFinite(keckAgeDays)) {
-        if (keckRecent === "1") {
-            keckStateClass = "apf-recent";
-        } else if (keckRecent === "0") {
-            keckStateClass = "apf-old";
-        }
-        keckStateText = `last epoch ${Math.round(keckAgeDays)} d ago`;
-    }
 
     let html = `<div class="product-links">`;
-    if (hasApf) {
-        html += `<div class="product-line"><a href="${apfUrl}" target="_blank" rel="noopener noreferrer">APF</a><span class="apf-state ${apfStateClass}">${apfStateText}</span></div>`;
-    }
+    html += `<div class="product-line"><a href="${apfUrl}" target="_blank" rel="noopener noreferrer">Gaia data</a></div>`;
     if (hasKeck) {
-        html += `<div class="product-line"><a href="${keckUrl}" target="_blank" rel="noopener noreferrer">KPF</a><span class="apf-state ${keckStateClass}">${keckStateText}</span></div>`;
+        html += `<div class="product-line"><a href="${keckUrl}" target="_blank" rel="noopener noreferrer">KPF</a></div>`;
     }
     if (hasSwift) {
         html += `<div class="product-line"><a href="${swiftUrl}" target="_blank" rel="noopener noreferrer">Swift</a></div>`;
@@ -1000,6 +1010,11 @@ async function updateApfRecencyFlags() {
             row.dataset.apfLatestMjd = String(latestMjd);
             row.dataset.apfAgeDays = String(ageDays);
             row.dataset.apfChecked = "1";
+            applyApfDaysDataset(row, ageDays);
+            const daysCell = cellAtColumn(row, "DAYS SINCE LAST APF");
+            if (daysCell) {
+                daysCell.textContent = String(Math.round(ageDays));
+            }
         } catch {
             row.dataset.apfRecent = "unknown";
             row.dataset.apfRecentWeek = "unknown";
@@ -1011,9 +1026,10 @@ async function updateApfRecencyFlags() {
     await Promise.allSettled(tasks);
 
     for (let i = 0; i < rows.length; i++) {
-        const cell = rows[i].getElementsByTagName("td")[14];
-        if (cell) {
-            cell.innerHTML = renderDataProductsCell(rows[i]);
+        setCellHtmlForColumn(rows[i], "DATA PRODUCTS", renderDataProductsCell(rows[i]));
+        const daysCell = cellAtColumn(rows[i], "DAYS SINCE LAST APF");
+        if (daysCell && row.dataset.apfAgeDays) {
+            daysCell.textContent = String(Math.round(parseFloat(row.dataset.apfAgeDays)));
         }
     }
     applyFiltersAndPagination();
@@ -1188,10 +1204,7 @@ async function updateKeckRecencyFlags() {
     await Promise.allSettled(tasks);
 
     for (let i = 0; i < rows.length; i++) {
-        const cell = rows[i].getElementsByTagName("td")[14];
-        if (cell) {
-            cell.innerHTML = renderDataProductsCell(rows[i]);
-        }
+        setCellHtmlForColumn(rows[i], "DATA PRODUCTS", renderDataProductsCell(rows[i]));
     }
     applyFiltersAndPagination();
 }
@@ -1368,7 +1381,7 @@ function arrayToTable(tableData) {
             ) {
                 text = "";
             }
-            if (i > 0 && colIdx !== 0 && !isMediaHeader(headerName) && !Number.isNaN(Number(text))) {
+            if (i > 0 && colIdx !== 0 && !isMediaHeader(headerName) && !NUMERIC_TABLE_HEADERS.has(headerName) && !Number.isNaN(Number(text))) {
                 text = Number(text).toFixed(5);
             }
             if (i > 0 && isMediaHeader(headerName) && hasNonNAContent(text)) {
@@ -1379,6 +1392,8 @@ function arrayToTable(tableData) {
             const fluxCol = colIndex("FLUX PLOT");
             const sourceCol = colIndex("SOURCE IMAGE");
             const dataProductsCol = colIndex("DATA PRODUCTS");
+            const apfDaysCol = colIndex("DAYS SINCE LAST APF");
+            const nextRvCol = colIndex("NEXT RV EVENT (MJD)");
             if (i > 0 && colIdx === rvPlotCol) {
                 cell.classList.add("col-rv-plot");
                 const gaiaId = row.dataset.gaiaId || normalizeGaiaId(rowData[String(colIndex("GAIA NAME"))] ?? rowData["0"]);
@@ -1400,22 +1415,33 @@ function arrayToTable(tableData) {
                 const gaiaId = row.dataset.gaiaId || normalizeGaiaId(rowData[String(colIndex("GAIA NAME"))] ?? rowData["0"]);
                 text = buildRvFitCellHtml(gaiaId);
             }
+            if (i > 0 && colIdx === apfDaysCol) {
+                cell.classList.add("col-apf-days");
+                applyApfDaysDataset(row, text);
+                const days = parseFloat(String(text ?? "").trim());
+                text = Number.isFinite(days) ? String(Math.round(days)) : "";
+            }
+            if (i > 0 && colIdx === nextRvCol) {
+                cell.classList.add("col-next-rv");
+                const evt = parseFloat(String(text ?? "").trim());
+                text = Number.isFinite(evt) ? evt.toFixed(3) : "";
+            }
             if (i > 0 && colIdx === dataProductsCol) {
-                const base = extractHrefFromAnchorHtml(text);
-                const gaiaId = row.dataset.gaiaId || "";
-                row.dataset.starBase = gaiaId ? `stars/Gaia_DR3_${gaiaId}` : base;
-                const rvPlotCell = rvPlotCol >= 0 ? rowData[String(rvPlotCol)] : "";
-                const rvFitCell = rvFitCol >= 0 ? rowData[String(rvFitCol)] : "";
-                const fluxCell = fluxCol >= 0 ? rowData[String(fluxCol)] : "";
-                const sourceCell = sourceCol >= 0 ? rowData[String(sourceCol)] : "";
-                row.dataset.hasApf = (hasNonNAContent(rvPlotCell) || hasNonNAContent(rvFitCell)) ? "1" : "0";
-                row.dataset.hasSwift = (hasNonNAContent(fluxCell) || hasNonNAContent(sourceCell)) ? "1" : "0";
-                row.dataset.hasKeck = KECK_GAIA_IDS.has(row.dataset.gaiaId || "") ? "1" : "0";
-                row.dataset.apfRecent = "unknown";
-                row.dataset.apfRecentWeek = "unknown";
-                row.dataset.apfAgeDays = "";
-                row.dataset.apfChecked = "0";
-                row.dataset.apfCount = "0";
+                cell.classList.add("col-data-products");
+                const gaiaId = row.dataset.gaiaId || normalizeGaiaId(rowData[String(colIndex("GAIA NAME"))] ?? rowData["0"]);
+                if (gaiaId) {
+                    row.dataset.starBase = `stars/Gaia_DR3_${gaiaId}`;
+                }
+                row.dataset.hasApf = gaiaId ? "1" : "0";
+                row.dataset.hasSwift = (hasNonNAContent(rowData[String(fluxCol)] ?? "") || hasNonNAContent(rowData[String(sourceCol)] ?? "")) ? "1" : "0";
+                row.dataset.hasKeck = KECK_GAIA_IDS.has(gaiaId || "") ? "1" : "0";
+                if (row.dataset.apfChecked !== "1") {
+                    row.dataset.apfRecent = "unknown";
+                    row.dataset.apfRecentWeek = "unknown";
+                    row.dataset.apfAgeDays = "";
+                    row.dataset.apfChecked = "0";
+                }
+                row.dataset.apfCount = row.dataset.apfCount || "0";
                 row.dataset.keckRecent = "unknown";
                 row.dataset.keckRecentWeek = "unknown";
                 row.dataset.keckAgeDays = "";
