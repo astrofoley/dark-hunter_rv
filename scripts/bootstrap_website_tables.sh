@@ -59,8 +59,9 @@ hdr = rows[0]
 for col in (
     "M2sin i (Msun)",
     "(M2sin i)/(sin i) (Msun)",
+    "GAIA DATA",
     "DAYS SINCE LAST APF",
-    "NEXT RV EVENT (MJD)",
+    "NEXT RV EVENT (DATE)",
 ):
     if col not in hdr:
         hdr.append(col)

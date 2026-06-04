@@ -2,7 +2,10 @@ from pathlib import Path
 
 from darkhunter_rv.website_table_csv import (
     days_since_last_apf_from_summary,
+    format_next_rv_event_cell,
+    mjd_to_yyyy_mm_dd,
     next_rv_event_from_fit_report,
+    parse_next_rv_cell_to_mjd,
     sooner_rv_extremum_mjd,
 )
 from darkhunter_rv.rv_point_filters import mjd_is_valid, rv_epoch_is_valid
@@ -27,6 +30,12 @@ def test_next_rv_event_prefers_fix_period_ecc(tmp_path: Path) -> None:
         },
     }
     assert next_rv_event_from_fit_report(rep) == 60080.0
+
+
+def test_mjd_to_yyyy_mm_dd() -> None:
+    assert mjd_to_yyyy_mm_dd(60000.0) == "2023/02/25"
+    assert format_next_rv_event_cell(60000.0) == "2023/02/25"
+    assert parse_next_rv_cell_to_mjd("2023/02/25") == pytest.approx(60000.0, abs=0.5)
 
 
 def test_days_since_last_apf_from_summary(tmp_path: Path) -> None:

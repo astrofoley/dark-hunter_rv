@@ -13,13 +13,27 @@ MEDIA_COLUMNS = frozenset({"RV PLOT", "RV FIT", "FLUX PLOT", "SOURCE IMAGE"})
 
 MASS_COLUMNS = ("M2sin i (Msun)", "(M2sin i)/(sin i) (Msun)")
 
-SCHEDULE_COLUMNS = ("DAYS SINCE LAST APF", "NEXT RV EVENT (MJD)")
+GAIA_DATA_COLUMN = "GAIA DATA"
+SCHEDULE_COLUMNS = ("DAYS SINCE LAST APF", "NEXT RV EVENT (DATE)")
+LEGACY_COLUMN_RENAMES = {"NEXT RV EVENT (MJD)": "NEXT RV EVENT (DATE)"}
 
 # Inserted immediately after these anchors when rebuilding header order.
 _INSERT_AFTER: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("M2 (Msun)", MASS_COLUMNS),
-    ("DATA PRODUCTS", SCHEDULE_COLUMNS),
+    ("DATA PRODUCTS", (GAIA_DATA_COLUMN,)),
+    (GAIA_DATA_COLUMN, SCHEDULE_COLUMNS),
 )
+
+
+def mjd_to_yyyy_mm_dd(mjd: float) -> str:
+    t = Time(float(mjd), format="mjd", scale="utc")
+    return t.datetime.strftime("%Y/%m/%d")
+
+
+def format_next_rv_event_cell(mjd: Optional[float]) -> str:
+    if mjd is None or not np.isfinite(mjd):
+        return ""
+    return mjd_to_yyyy_mm_dd(float(mjd))
 
 
 def row_dict(hdr: List[str], row: List[str]) -> Dict[str, str]:
@@ -28,6 +42,7 @@ def row_dict(hdr: List[str], row: List[str]) -> Dict[str, str]:
         key = (name or "").strip()
         if not key:
             continue
+        key = LEGACY_COLUMN_RENAMES.get(key, key)
         out[key] = row[i] if i < len(row) else ""
     return out
 
@@ -85,12 +100,13 @@ def build_canonical_header(hdr: List[str]) -> List[str]:
 
     for _, names in _INSERT_AFTER:
         _ensure_columns_present(base, names)
+    _ensure_columns_present(base, (GAIA_DATA_COLUMN,))
 
     out: List[str] = []
     inserted_mass = False
     inserted_sched = False
     for h in base:
-        if h in MASS_COLUMNS or h in SCHEDULE_COLUMNS:
+        if h in MASS_COLUMNS or h in SCHEDULE_COLUMNS or h == GAIA_DATA_COLUMN:
             continue
         out.append(h)
         if h == "M2 (Msun)" and not inserted_mass:
@@ -98,11 +114,14 @@ def build_canonical_header(hdr: List[str]) -> List[str]:
                 if c in base:
                     out.append(c)
             inserted_mass = True
-        if h == "DATA PRODUCTS" and not inserted_sched:
-            for c in SCHEDULE_COLUMNS:
-                if c in base:
-                    out.append(c)
-            inserted_sched = True
+        if h == "DATA PRODUCTS":
+            if GAIA_DATA_COLUMN in base and GAIA_DATA_COLUMN not in out:
+                out.append(GAIA_DATA_COLUMN)
+            if not inserted_sched:
+                for c in SCHEDULE_COLUMNS:
+                    if c in base:
+                        out.append(c)
+                inserted_sched = True
 
     if not inserted_mass:
         for c in MASS_COLUMNS:
@@ -124,7 +143,7 @@ def normalize_data_csv(hdr: List[str], data_rows: List[List[str]]) -> Tuple[List
     Rebuild rows keyed by column name (fixes off-by-one from header-only edits).
     Clears media / stray <img> cells. Returns (new_hdr, n_stray_cleared).
     """
-    _ensure_columns_present(hdr, MASS_COLUMNS + SCHEDULE_COLUMNS)
+    _ensure_columns_present(hdr, MASS_COLUMNS + (GAIA_DATA_COLUMN,) + SCHEDULE_COLUMNS)
     align_rows_to_header(hdr, data_rows)
 
     old_hdr = list(hdr)
@@ -211,6 +230,30 @@ def next_rv_event_from_fit_report(report: dict) -> Optional[float]:
             if t is not None:
                 return t
     return sooner_rv_extremum_mjd(report, now_mjd=report.get("now_mjd"))
+
+
+def parse_next_rv_cell_to_mjd(value: str) -> Optional[float]:
+    """Parse CSV cell: YYYY/MM/DD or legacy MJD float."""
+    s = (value or "").strip()
+    if not s:
+        return None
+    m = re.match(r"^(\d{4})/(\d{1,2})/(\d{1,2})$", s)
+    if m:
+        try:
+            return float(
+                Time(
+                    {"year": int(m.group(1)), "month": int(m.group(2)), "day": int(m.group(3))},
+                    format="ymd",
+                    scale="utc",
+                ).mjd
+            )
+        except Exception:
+            return None
+    try:
+        v = float(s)
+        return v if np.isfinite(v) else None
+    except ValueError:
+        return None
 
 
 def gaia_id_from_row(gaia_cell: str) -> str:

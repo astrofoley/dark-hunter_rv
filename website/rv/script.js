@@ -55,8 +55,10 @@ const headerDisplayMap = {
     "FLUX PLOT": "H-beta",
     "SOURCE IMAGE": "UV Image",
     "DATA PRODUCTS": "Data Products",
+    "GAIA DATA": "Star files",
     "DAYS SINCE LAST APF": "Days since<br>last APF",
-    "NEXT RV EVENT (MJD)": "Next RV<br>min/max (MJD)",
+    "NEXT RV EVENT (DATE)": "Next RV<br>min/max",
+    "NEXT RV EVENT (MJD)": "Next RV<br>min/max",
     "BROAD LINES (HOT STAR/RAPID ROTATION)": "Broad lines",
     "COMPLETE ORBIT/MINIMA TO MAXIMA": "Complete orbit now",
     "JERK STAR": "Jerk star",
@@ -408,7 +410,8 @@ function colIndex(headerName) {
     return Object.prototype.hasOwnProperty.call(colByHeader, headerName) ? colByHeader[headerName] : -1;
 }
 
-const NUMERIC_TABLE_HEADERS = new Set(["DAYS SINCE LAST APF", "NEXT RV EVENT (MJD)"]);
+const NUMERIC_TABLE_HEADERS = new Set(["DAYS SINCE LAST APF"]);
+const DATE_TABLE_HEADERS = new Set(["NEXT RV EVENT (DATE)", "NEXT RV EVENT (MJD)"]);
 
 function cellAtColumn(row, headerName) {
     const idx = colIndex(headerName);
@@ -443,6 +446,55 @@ function setCellHtmlForColumn(row, headerName, html) {
     if (cell) {
         cell.innerHTML = html;
     }
+}
+
+function colIndexNextRvEvent() {
+    if (colIndex("NEXT RV EVENT (DATE)") >= 0) {
+        return colIndex("NEXT RV EVENT (DATE)");
+    }
+    return colIndex("NEXT RV EVENT (MJD)");
+}
+
+function mjdToYyyyMmDd(mjd) {
+    const unixMs = (mjd - 40587.0) * 86400000.0;
+    const d = new Date(unixMs);
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    return `${y}/${m}/${day}`;
+}
+
+function formatNextRvCellDisplay(text) {
+    const s = String(text ?? "").trim();
+    if (!s) {
+        return "";
+    }
+    if (/^\d{4}\/\d{1,2}\/\d{1,2}$/.test(s)) {
+        return s;
+    }
+    const mjd = parseFloat(s);
+    if (Number.isFinite(mjd)) {
+        return mjdToYyyyMmDd(mjd);
+    }
+    return s;
+}
+
+function parseNextRvForSort(text) {
+    const s = String(text ?? "").trim();
+    const m = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+    if (m) {
+        return Date.UTC(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10));
+    }
+    const mjd = parseFloat(s);
+    return Number.isFinite(mjd) ? (mjd - 40587.0) * 86400000.0 : Number.POSITIVE_INFINITY;
+}
+
+function buildGaiaDataCellHtml(gaiaId) {
+    if (!gaiaId) {
+        return "N/A";
+    }
+    const url = `stars/Gaia_DR3_${gaiaId}/Gaia/`;
+    return `<a href="${url}" target="_blank" rel="noopener noreferrer">Star files</a>`;
 }
 
 function headerNameForIndex(colIdx) {
@@ -904,23 +956,29 @@ function updateToggleCounts(baseRows) {
 
 function renderDataProductsCell(row) {
     const gaiaId = row.dataset.gaiaId || "";
-    if (!gaiaId) {
+    const base = row.dataset.starBase || (gaiaId ? `stars/Gaia_DR3_${gaiaId}` : "");
+    if (!base) {
         return "N/A";
     }
-    const base = `stars/Gaia_DR3_${gaiaId}`;
     const apfUrl = `${base}/Gaia/`;
     const swiftUrl = `${base}/Swift/`;
     const keckUrl = `${base}/Keck/`;
+    const hasApf = row.dataset.hasApf !== "0";
     const hasSwift = row.dataset.hasSwift === "1";
     const hasKeck = row.dataset.hasKeck === "1";
 
     let html = `<div class="product-links">`;
-    html += `<div class="product-line"><a href="${apfUrl}" target="_blank" rel="noopener noreferrer">Gaia data</a></div>`;
+    if (hasApf) {
+        html += `<div class="product-line"><a href="${apfUrl}" target="_blank" rel="noopener noreferrer">APF</a></div>`;
+    }
     if (hasKeck) {
         html += `<div class="product-line"><a href="${keckUrl}" target="_blank" rel="noopener noreferrer">KPF</a></div>`;
     }
     if (hasSwift) {
         html += `<div class="product-line"><a href="${swiftUrl}" target="_blank" rel="noopener noreferrer">Swift</a></div>`;
+    }
+    if (!hasApf && !hasKeck && !hasSwift) {
+        html += `<span class="product-muted">—</span>`;
     }
     html += `</div>`;
     return html;
@@ -1381,7 +1439,14 @@ function arrayToTable(tableData) {
             ) {
                 text = "";
             }
-            if (i > 0 && colIdx !== 0 && !isMediaHeader(headerName) && !NUMERIC_TABLE_HEADERS.has(headerName) && !Number.isNaN(Number(text))) {
+            if (
+                i > 0
+                && colIdx !== 0
+                && !isMediaHeader(headerName)
+                && !NUMERIC_TABLE_HEADERS.has(headerName)
+                && !DATE_TABLE_HEADERS.has(headerName)
+                && !Number.isNaN(Number(text))
+            ) {
                 text = Number(text).toFixed(5);
             }
             if (i > 0 && isMediaHeader(headerName) && hasNonNAContent(text)) {
@@ -1392,8 +1457,9 @@ function arrayToTable(tableData) {
             const fluxCol = colIndex("FLUX PLOT");
             const sourceCol = colIndex("SOURCE IMAGE");
             const dataProductsCol = colIndex("DATA PRODUCTS");
+            const gaiaDataCol = colIndex("GAIA DATA");
             const apfDaysCol = colIndex("DAYS SINCE LAST APF");
-            const nextRvCol = colIndex("NEXT RV EVENT (MJD)");
+            const nextRvCol = colIndexNextRvEvent();
             if (i > 0 && colIdx === rvPlotCol) {
                 cell.classList.add("col-rv-plot");
                 const gaiaId = row.dataset.gaiaId || normalizeGaiaId(rowData[String(colIndex("GAIA NAME"))] ?? rowData["0"]);
@@ -1404,6 +1470,10 @@ function arrayToTable(tableData) {
             }
             if (i > 0 && colIdx === sourceCol) {
                 cell.classList.add("col-source-image");
+                const gaiaId = row.dataset.gaiaId || normalizeGaiaId(rowData[String(colIndex("GAIA NAME"))] ?? rowData["0"]);
+                if (!hasNonNAContent(text)) {
+                    text = "N/A";
+                }
             }
             if (i > 0 && colIdx === fluxCol) {
                 cell.classList.add("col-flux-plot");
@@ -1423,8 +1493,12 @@ function arrayToTable(tableData) {
             }
             if (i > 0 && colIdx === nextRvCol) {
                 cell.classList.add("col-next-rv");
-                const evt = parseFloat(String(text ?? "").trim());
-                text = Number.isFinite(evt) ? evt.toFixed(3) : "";
+                text = formatNextRvCellDisplay(text);
+            }
+            if (i > 0 && colIdx === gaiaDataCol) {
+                cell.classList.add("col-gaia-data");
+                const gaiaId = row.dataset.gaiaId || normalizeGaiaId(rowData[String(colIndex("GAIA NAME"))] ?? rowData["0"]);
+                text = buildGaiaDataCellHtml(gaiaId);
             }
             if (i > 0 && colIdx === dataProductsCol) {
                 cell.classList.add("col-data-products");

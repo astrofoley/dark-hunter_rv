@@ -80,55 +80,46 @@ th {
     padding: 6px 6px;
 }
 
-/* Keep science plot columns readable */
-#csv-container th:nth-child(11),
-#csv-container td:nth-child(11) {
-    min-width: 260px;
-}
-
-/* RV fit column width */
-#csv-container th:nth-child(12),
-#csv-container td:nth-child(12) {
-    min-width: 300px;
-}
-
-#csv-container th:nth-child(9),
-#csv-container td:nth-child(9),
-#csv-container th:nth-child(10),
-#csv-container td:nth-child(10) {
+/* Mass columns */
+#csv-container td.col-m2sin,
+#csv-container td.col-m2over,
+#csv-container th.col-m2sin,
+#csv-container th.col-m2over {
     min-width: 110px;
 }
 
-#csv-container th:nth-child(13),
-#csv-container td:nth-child(13) {
-    min-width: 230px;
-}
-
-#csv-container th:nth-child(14),
-#csv-container td:nth-child(14) {
-    min-width: 260px;
-}
-
-/* Hide UV image column in main table view */
+/* RV / H-beta plot columns (header-index independent) */
+#csv-container th.col-rv-plot,
+#csv-container td.col-rv-plot,
+#csv-container th.col-rv-fit,
+#csv-container td.col-rv-fit,
+#csv-container th.col-flux-plot,
+#csv-container td.col-flux-plot,
 #csv-container th.col-source-image,
 #csv-container td.col-source-image {
-    display: none;
+    min-width: 280px;
+    width: 280px;
 }
 
 #csv-container td.col-rv-plot img,
 #csv-container td.col-rv-fit img,
 #csv-container td.col-flux-plot img,
 #csv-container td.col-source-image img {
-    width: 100%;
-    max-width: 300px;
+    width: 280px;
+    max-width: 280px;
+    min-width: 200px;
     height: auto;
     display: block;
     margin: 0 auto;
 }
 
-img {
-    width:100%;
-    height:auto;
+#csv-container td.col-data-products,
+#csv-container td.col-gaia-data {
+    min-width: 100px;
+}
+
+#csv-container img {
+    height: auto;
 }
 
 #input-box {

@@ -66,9 +66,11 @@ Ensure Apache serves `/var/www/html/darkhunter/rv/` (existing `Alias` or symlink
 
 | Column | Meaning |
 |--------|---------|
-| **DATA PRODUCTS** | Link to `stars/Gaia_DR3_<id>/Gaia/` (Apache directory listing) |
+| **DATA PRODUCTS** | APF / KPF / Swift product links (instrument trees) |
+| **GAIA DATA** | Link to `stars/Gaia_DR3_<id>/Gaia/` (star file directory) |
+| **SOURCE IMAGE** | UV image from legacy CSV (restored; not hidden) |
 | **DAYS SINCE LAST APF** | Days since latest APF pipeline epoch (sortable; drives &lt;7d / &lt;30d filters) |
-| **NEXT RV EVENT (MJD)** | Sooner of next max/min RV from **P & e fixed** fit (Gaia NSS) |
+| **NEXT RV EVENT (DATE)** | Sooner of next max/min RV from **P & e fixed** fit, as `YYYY/MM/DD` |
 
 **Mass columns:**
 
