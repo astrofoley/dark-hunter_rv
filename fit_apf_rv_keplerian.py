@@ -278,7 +278,7 @@ def fetch_gaia_nss_orbit(source_id: str, cache_path: Optional[Path] = None) -> O
 
     try:
         orbit_query = f"""
-        SELECT source_id, nss_solution_type, period, eccentricity
+        SELECT source_id, nss_solution_type, period, eccentricity, inclination
         FROM gaiadr3.nss_two_body_orbit
         WHERE source_id = '{source_id}'
         """
@@ -314,6 +314,9 @@ def fetch_gaia_nss_orbit(source_id: str, cache_path: Optional[Path] = None) -> O
             if p <= 0 or e < 0 or e >= 1:
                 continue
             out = {"period_days": float(p), "eccentricity": float(e)}
+            incl_o = _first_finite(row, ["inclination", "incl"])
+            if incl_o is not None and np.isfinite(incl_o):
+                out["inclination_deg"] = float(incl_o)
             if m1 is not None:
                 out["m1_msun"] = m1
             if m2 is not None:
@@ -360,7 +363,7 @@ def prefetch_gaia_nss_bulk(source_ids: List[str], cache_path: Path, chunk_size: 
     for ids in _chunk(to_fetch, chunk_size):
         id_clause = ",".join(ids)
         orbit_q = (
-            "SELECT source_id, period, eccentricity "
+            "SELECT source_id, period, eccentricity, inclination "
             "FROM gaiadr3.nss_two_body_orbit "
             f"WHERE source_id IN ({id_clause})"
         )
@@ -389,7 +392,11 @@ def prefetch_gaia_nss_bulk(source_ids: List[str], cache_path: Path, chunk_size: 
                 continue
             if not np.isfinite(p) or not np.isfinite(e) or p <= 0 or e < 0 or e >= 1:
                 continue
-            orbit_by[sid] = {"period_days": float(p), "eccentricity": float(e)}
+            entry: Dict[str, float] = {"period_days": float(p), "eccentricity": float(e)}
+            incl_o = _first_finite(row, ["inclination", "incl"])
+            if incl_o is not None and np.isfinite(incl_o):
+                entry["inclination_deg"] = float(incl_o)
+            orbit_by[sid] = entry
 
         mass_by: Dict[str, Dict[str, float]] = {}
         for row in mass_res:
@@ -971,6 +978,55 @@ def resolve_m1_msun_for_rv_mass(
     return None
 
 
+def _valid_inclination_deg(value: Any) -> Optional[float]:
+    if not isinstance(value, (int, float)) or not np.isfinite(value):
+        return None
+    incl = float(value)
+    # sin(i) must be usable; Gaia NSS inclinations are in (0, 180) degrees.
+    if incl <= 0.05 or incl >= 179.95:
+        return None
+    return incl
+
+
+def resolve_inclination_deg_for_rv_mass(
+    report: dict,
+    *,
+    summary_path: Optional[Path] = None,
+    gaia_cache: Optional[Dict[str, Any]] = None,
+) -> Optional[float]:
+    """Astrometric inclination (deg) for M2 at i = (M2 sin i) / sin(i)."""
+    incl = _valid_inclination_deg(report.get("inclination_deg_used"))
+    if incl is not None:
+        return incl
+
+    gnss = _gaia_nss_dict_from_report(report)
+    incl = _valid_inclination_deg(gnss.get("inclination_deg"))
+    if incl is not None:
+        return incl
+
+    sid = report.get("gaia_source_id")
+    cached = _gaia_cache_entry(gaia_cache, str(sid) if sid is not None else None)
+    if cached is not None:
+        incl = _valid_inclination_deg(cached.get("inclination_deg"))
+        if incl is not None:
+            return incl
+
+    if summary_path is not None and summary_path.is_file():
+        incl = _valid_inclination_deg(
+            load_mass_priors_from_summary(summary_path).get("inclination_deg")
+        )
+        if incl is not None:
+            return incl
+        meta = _parse_gaia_metadata(summary_path)
+        if meta:
+            incl = _valid_inclination_deg(
+                _meta_float(meta, "Inclination", "inclination", "Inclination_Deg")
+            )
+            if incl is not None:
+                return incl
+    return None
+
+
 def resolve_m2_astrometric_msun(
     report: dict,
     *,
@@ -1017,15 +1073,9 @@ def website_table_masses_from_report(
     m2sin = _finite_mass_value(report.get("m2sini_msun"))
     m2_at_i = _finite_mass_value(report.get("m2_given_inclination_msun"))
 
-    incl_raw = report.get("inclination_deg_used")
-    incl = float(incl_raw) if isinstance(incl_raw, (int, float)) and np.isfinite(incl_raw) else None
-
-    if summary_path is not None and summary_path.is_file():
-        meta_mass = load_mass_priors_from_summary(summary_path)
-        if incl is None:
-            incl_meta = meta_mass.get("inclination_deg")
-            if incl_meta is not None and np.isfinite(incl_meta):
-                incl = float(incl_meta)
+    incl = resolve_inclination_deg_for_rv_mass(
+        report, summary_path=summary_path, gaia_cache=gaia_cache
+    )
 
     m1 = resolve_m1_msun_for_rv_mass(
         report, summary_path=summary_path, gaia_cache=gaia_cache
@@ -1037,8 +1087,11 @@ def website_table_masses_from_report(
             calc_sini, calc_at_i = rv_only_mass_estimates(rep_free, m1, incl)
             if m2sin is None:
                 m2sin = _finite_mass_value(calc_sini)
-            if m2_at_i is None and incl is not None:
+            if m2_at_i is None:
                 m2_at_i = _finite_mass_value(calc_at_i)
+            # If M2 sin i is known but Gaia i is not, use i = 90° (M2 at i = M2 sin i).
+            if m2_at_i is None and m2sin is not None and incl is None:
+                m2_at_i = float(m2sin)
 
     return {
         "m2_msun": resolve_m2_astrometric_msun(
@@ -1522,6 +1575,14 @@ def run_one(
         fit_m1_msun = mass_meta.get("m1_msun")
     if fit_inclination_deg is None:
         fit_inclination_deg = mass_meta.get("inclination_deg")
+    fit_inclination_deg = resolve_inclination_deg_for_rv_mass(
+        {
+            "gaia_source_id": gaia_source_id,
+            "inclination_deg_used": fit_inclination_deg,
+            "gaia_nss": gaia_nss,
+        },
+        summary_path=summary_path,
+    )
 
     fit_variants = fit_all_variants(
         t,
