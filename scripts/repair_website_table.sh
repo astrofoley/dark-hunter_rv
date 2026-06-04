@@ -51,6 +51,7 @@ if [[ ! -f "$REPO/scripts/update_website_table_columns.py" ]]; then
 fi
 
 echo "=== Normalize data.csv + fill columns from existing summaries/reports ==="
+echo "M2 sin i / M2 at i need M1 (gaia_nss_cache.json, Teff estimate, or 1 Msun default)."
 "$PY" scripts/update_website_table_columns.py \
   --data-csv "$WEB_ROOT/tables/data.csv" \
   --output-dir "$OUT" \

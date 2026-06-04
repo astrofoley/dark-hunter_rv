@@ -215,7 +215,11 @@ import json
 import os
 from pathlib import Path
 
-from fit_apf_rv_keplerian import lookup_fit_report_by_gaia_id, website_table_masses_from_report
+from fit_apf_rv_keplerian import (
+    _load_json_cache,
+    lookup_fit_report_by_gaia_id,
+    website_table_masses_from_report,
+)
 from darkhunter_rv.website_table_csv import (
     days_since_last_apf_from_summary,
     format_next_rv_event_cell,
@@ -227,6 +231,8 @@ from darkhunter_rv.website_table_csv import (
 
 report_dir = Path(os.environ["REPORTS_DIR"])
 out_dir = Path(os.environ.get("OUT", report_dir.parent / "output"))
+gaia_cache_path = report_dir / "gaia_nss_cache.json"
+gaia_cache = _load_json_cache(gaia_cache_path) if gaia_cache_path.is_file() else {}
 data_csv = Path(os.environ["DATA_CSV"])
 missing_csv = Path(os.environ["MISSING_ASSETS_CSV"])
 summary_json = Path(os.environ["STAGED_SUMMARY"])
@@ -288,6 +294,7 @@ for r in data_rows:
         masses = website_table_masses_from_report(
             rep,
             summary_path=summ if summ.is_file() else None,
+            gaia_cache=gaia_cache,
         )
         m2_astro = masses["m2_msun"]
         m2s = masses["m2sin_i_msun"]

@@ -885,10 +885,127 @@ def _finite_mass_value(value: Any) -> Optional[float]:
     return None
 
 
+def _gaia_nss_dict_from_report(report: dict) -> Dict[str, Any]:
+    gnss = report.get("gaia_nss")
+    return gnss if isinstance(gnss, dict) else {}
+
+
+def _gaia_cache_entry(gaia_cache: Optional[Dict[str, Any]], gaia_source_id: Optional[str]) -> Optional[dict]:
+    if not gaia_cache or not gaia_source_id:
+        return None
+    sid = str(gaia_source_id).strip()
+    for key in (sid, f"Gaia_DR3_{sid}"):
+        val = gaia_cache.get(key)
+        if isinstance(val, dict) and not val.get("_none"):
+            return val
+    return None
+
+
+def estimate_m1_msun_from_hrd(meta: Dict[str, Any]) -> Optional[float]:
+    """Rough main-sequence M1 (Msun) from Gaia GSP-PHOT Teff/logg when NSS masses are absent."""
+    teff = _meta_float(meta, "Teff", "teff")
+    if teff is None or not (3200.0 <= teff <= 9000.0):
+        return None
+    logg = _meta_float(meta, "logg", "Logg")
+    if logg is not None and logg < 3.5:
+        return None
+    m1 = float((teff / 5772.0) ** 1.8)
+    return float(np.clip(m1, 0.5, 2.0))
+
+
+def resolve_m1_msun_for_rv_mass(
+    report: dict,
+    *,
+    summary_path: Optional[Path] = None,
+    gaia_cache: Optional[Dict[str, Any]] = None,
+) -> Optional[float]:
+    """
+    Primary mass for converting RV f(M) to M2 sin i / M2 at i.
+
+    Order: fit report → embedded gaia_nss → gaia_nss_cache.json → summary metadata →
+    M2/Mass_Ratio → Teff/logg estimate → 1 Msun if a free RV fit exists.
+    """
+    m1 = _finite_mass_value(report.get("used_m1_msun"))
+    if m1 is not None:
+        return m1
+
+    gnss = _gaia_nss_dict_from_report(report)
+    m1 = _finite_mass_value(gnss.get("m1_msun"))
+    if m1 is not None:
+        return m1
+
+    sid = report.get("gaia_source_id")
+    cached = _gaia_cache_entry(gaia_cache, str(sid) if sid is not None else None)
+    if cached is not None:
+        m1 = _finite_mass_value(cached.get("m1_msun"))
+        if m1 is not None:
+            return m1
+
+    meta_mass: Dict[str, float] = {}
+    meta_raw: Optional[Dict[str, Any]] = None
+    if summary_path is not None and summary_path.is_file():
+        meta_mass = load_mass_priors_from_summary(summary_path)
+        m1 = _finite_mass_value(meta_mass.get("m1_msun"))
+        if m1 is not None:
+            return m1
+        meta_raw = _parse_gaia_metadata(summary_path)
+
+    m2 = _finite_mass_value(report.get("used_m2_msun"))
+    if m2 is None:
+        m2 = _finite_mass_value(gnss.get("m2_msun"))
+    if m2 is None and cached is not None:
+        m2 = _finite_mass_value(cached.get("m2_msun"))
+    if m2 is None:
+        m2 = _finite_mass_value(meta_mass.get("m2_msun"))
+    q = _meta_float(meta_raw, "Mass_Ratio", "mass_ratio") if meta_raw else None
+    if m2 is not None and q is not None and q > 0:
+        return float(m2 / q)
+
+    if meta_raw:
+        est = estimate_m1_msun_from_hrd(meta_raw)
+        if est is not None:
+            return est
+
+    if _free_fit_variant_report(report) is not None:
+        return 1.0
+    return None
+
+
+def resolve_m2_astrometric_msun(
+    report: dict,
+    *,
+    summary_path: Optional[Path] = None,
+    gaia_cache: Optional[Dict[str, Any]] = None,
+) -> Optional[float]:
+    """Gaia NSS astrometric secondary mass (not from the RV-only fit)."""
+    m2 = _finite_mass_value(report.get("used_m2_msun"))
+    if m2 is not None:
+        return m2
+    m2 = _finite_mass_value(report.get("m2_astrometric_msun"))
+    if m2 is not None:
+        return m2
+    gnss = _gaia_nss_dict_from_report(report)
+    m2 = _finite_mass_value(gnss.get("m2_msun"))
+    if m2 is not None:
+        return m2
+    sid = report.get("gaia_source_id")
+    cached = _gaia_cache_entry(gaia_cache, str(sid) if sid is not None else None)
+    if cached is not None:
+        m2 = _finite_mass_value(cached.get("m2_msun"))
+        if m2 is not None:
+            return m2
+    if summary_path is not None and summary_path.is_file():
+        m2 = _finite_mass_value(load_mass_priors_from_summary(summary_path).get("m2_msun"))
+        if m2 is not None:
+            return m2
+    return None
+
+
 def website_table_masses_from_report(
     report: dict,
     *,
     summary_path: Optional[Path] = None,
+    gaia_cache: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Optional[float]]:
     """
     Map a Keplerian fit JSON report to website ``data.csv`` mass columns.
@@ -900,18 +1017,19 @@ def website_table_masses_from_report(
     m2sin = _finite_mass_value(report.get("m2sini_msun"))
     m2_at_i = _finite_mass_value(report.get("m2_given_inclination_msun"))
 
-    m1 = _finite_mass_value(report.get("used_m1_msun"))
     incl_raw = report.get("inclination_deg_used")
     incl = float(incl_raw) if isinstance(incl_raw, (int, float)) and np.isfinite(incl_raw) else None
 
-    if summary_path is not None:
+    if summary_path is not None and summary_path.is_file():
         meta_mass = load_mass_priors_from_summary(summary_path)
-        if m1 is None:
-            m1 = _finite_mass_value(meta_mass.get("m1_msun"))
         if incl is None:
             incl_meta = meta_mass.get("inclination_deg")
             if incl_meta is not None and np.isfinite(incl_meta):
                 incl = float(incl_meta)
+
+    m1 = resolve_m1_msun_for_rv_mass(
+        report, summary_path=summary_path, gaia_cache=gaia_cache
+    )
 
     if m2sin is None or m2_at_i is None:
         rep_free = _free_fit_variant_report(report)
@@ -919,11 +1037,13 @@ def website_table_masses_from_report(
             calc_sini, calc_at_i = rv_only_mass_estimates(rep_free, m1, incl)
             if m2sin is None:
                 m2sin = _finite_mass_value(calc_sini)
-            if m2_at_i is None:
+            if m2_at_i is None and incl is not None:
                 m2_at_i = _finite_mass_value(calc_at_i)
 
     return {
-        "m2_msun": _finite_mass_value(report.get("used_m2_msun")),
+        "m2_msun": resolve_m2_astrometric_msun(
+            report, summary_path=summary_path, gaia_cache=gaia_cache
+        ),
         "m2sin_i_msun": m2sin,
         "m2_at_i_msun": m2_at_i,
     }
