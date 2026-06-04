@@ -988,6 +988,21 @@ def _valid_inclination_deg(value: Any) -> Optional[float]:
     return incl
 
 
+def _json_inclination_is_stale_sin_i_fallback(report: dict) -> bool:
+    """
+    Detect fit JSON from the old i=90° table-fill era: inclination_deg_used=90 with
+    m2_given_inclination_msun copied from m2sini_msun.
+    """
+    incl = _valid_inclination_deg(report.get("inclination_deg_used"))
+    if incl is None or abs(incl - 90.0) > 0.05:
+        return False
+    stored_at = _finite_mass_value(report.get("m2_given_inclination_msun"))
+    stored_sin = _finite_mass_value(report.get("m2sini_msun"))
+    if stored_at is None or stored_sin is None:
+        return False
+    return abs(stored_at - stored_sin) <= max(1e-6, 1e-4 * stored_sin)
+
+
 def resolve_inclination_deg_for_rv_mass(
     report: dict,
     *,
@@ -995,10 +1010,6 @@ def resolve_inclination_deg_for_rv_mass(
     gaia_cache: Optional[Dict[str, Any]] = None,
 ) -> Optional[float]:
     """Astrometric inclination (deg) for M2 at i = (M2 sin i) / sin(i)."""
-    incl = _valid_inclination_deg(report.get("inclination_deg_used"))
-    if incl is not None:
-        return incl
-
     gnss = _gaia_nss_dict_from_report(report)
     incl = _valid_inclination_deg(gnss.get("inclination_deg"))
     if incl is not None:
@@ -1024,6 +1035,11 @@ def resolve_inclination_deg_for_rv_mass(
             )
             if incl is not None:
                 return incl
+
+    if not _json_inclination_is_stale_sin_i_fallback(report):
+        incl = _valid_inclination_deg(report.get("inclination_deg_used"))
+        if incl is not None:
+            return incl
     return None
 
 
@@ -1065,6 +1081,17 @@ def enrich_gaia_cache_from_summaries(
         if patched:
             n += 1
     return n
+
+
+def m2_msun_at_inclination(m2sin_msun: float, inclination_deg: float) -> Optional[float]:
+    """M2 at inclination i (Msun) from M2 sin i and astrometric i (degrees)."""
+    incl = _valid_inclination_deg(inclination_deg)
+    if incl is None or not np.isfinite(m2sin_msun) or float(m2sin_msun) <= 0:
+        return None
+    sin_i = float(np.sin(np.deg2rad(incl)))
+    if sin_i < 1e-6:
+        return None
+    return float(m2sin_msun / sin_i)
 
 
 def resolve_m2_astrometric_msun(
@@ -1123,24 +1150,23 @@ def website_table_masses_from_report(
     if rep_free is not None and m1 is not None:
         calc_sini, calc_at_i = rv_only_mass_estimates(rep_free, m1, incl)
         m2sin = _finite_mass_value(calc_sini)
-        if incl is not None:
+        if incl is not None and m2sin is not None:
             m2_at_i = _finite_mass_value(calc_at_i)
+            if m2_at_i is None:
+                m2_at_i = m2_msun_at_inclination(m2sin, incl)
     if m2sin is None:
         m2sin = _finite_mass_value(report.get("m2sini_msun"))
+    if m2_at_i is None and m2sin is not None and incl is not None:
+        m2_at_i = m2_msun_at_inclination(m2sin, incl)
     if m2_at_i is None:
         stored_at_i = _finite_mass_value(report.get("m2_given_inclination_msun"))
         stored_sin_json = _finite_mass_value(report.get("m2sini_msun"))
-        if stored_at_i is not None:
-            incl_used = report.get("inclination_deg_used")
-            has_fit_incl = isinstance(incl_used, (int, float)) and np.isfinite(incl_used)
-            if incl is not None or has_fit_incl:
-                m2_at_i = stored_at_i
-            elif (
-                stored_sin_json is not None
-                and abs(stored_at_i - stored_sin_json) > max(1e-6, 1e-4 * stored_sin_json)
-            ):
-                # Trust fit JSON when M2 at i was computed with real i (not a sin-i copy).
-                m2_at_i = stored_at_i
+        if (
+            stored_at_i is not None
+            and stored_sin_json is not None
+            and abs(stored_at_i - stored_sin_json) > max(1e-6, 1e-4 * stored_sin_json)
+        ):
+            m2_at_i = stored_at_i
 
     return {
         "m2_msun": resolve_m2_astrometric_msun(

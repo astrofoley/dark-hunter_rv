@@ -304,14 +304,18 @@ for r in data_rows:
                 r.append("")
             r[m2_i] = f"{m2_astro:.5f}"
             updated += 1
+        while len(r) <= m2sini_i:
+            r.append("")
         if m2s is not None:
-            while len(r) <= m2sini_i:
-                r.append("")
             r[m2sini_i] = f"{m2s:.5f}"
+        else:
+            r[m2sini_i] = ""
+        while len(r) <= m2over_i:
+            r.append("")
         if m2i is not None:
-            while len(r) <= m2over_i:
-                r.append("")
             r[m2over_i] = f"{m2i:.5f}"
+        else:
+            r[m2over_i] = ""
         nxt = next_rv_event_from_fit_report(rep)
         if nxt is not None:
             while len(r) <= next_rv_i:

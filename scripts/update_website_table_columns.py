@@ -84,6 +84,7 @@ def update_table_columns(
     n_m2 = 0
     n_m2sini = 0
     n_m2_at_i = 0
+    n_m2_at_i_eq_sin = 0
     n_next = 0
     target = (gaia_id or "").strip()
     for r in data_rows:
@@ -118,16 +119,25 @@ def update_table_columns(
                 r.append("")
             r[m2_i] = f"{masses['m2_msun']:.5f}"
             n_m2 += 1
+        while len(r) <= m2sini_i:
+            r.append("")
         if masses["m2sin_i_msun"] is not None:
-            while len(r) <= m2sini_i:
-                r.append("")
             r[m2sini_i] = f"{masses['m2sin_i_msun']:.5f}"
             n_m2sini += 1
+        else:
+            r[m2sini_i] = ""
+        while len(r) <= m2over_i:
+            r.append("")
         if masses["m2_at_i_msun"] is not None:
-            while len(r) <= m2over_i:
-                r.append("")
             r[m2over_i] = f"{masses['m2_at_i_msun']:.5f}"
             n_m2_at_i += 1
+            if masses["m2sin_i_msun"] is not None:
+                if abs(masses["m2_at_i_msun"] - masses["m2sin_i_msun"]) <= max(
+                    1e-6, 1e-4 * masses["m2sin_i_msun"]
+                ):
+                    n_m2_at_i_eq_sin += 1
+        else:
+            r[m2over_i] = ""
         nxt = next_rv_event_from_fit_report(rep)
         if nxt is not None:
             while len(r) <= next_rv_i:
@@ -153,6 +163,7 @@ def update_table_columns(
         "m2_filled": n_m2,
         "m2sin_i_filled": n_m2sini,
         "m2_at_i_filled": n_m2_at_i,
+        "m2_at_i_equals_m2sin_i": n_m2_at_i_eq_sin,
         "next_rv_filled": n_next,
         "reports_loaded": len(reports),
         "cache_enriched_from_summaries": n_cache_summ,
@@ -205,7 +216,8 @@ def main() -> int:
         f"updated {args.data_csv}: {stats['data_rows']} rows, {stats['columns']} columns, "
         f"cleared {stats['stray_img_cleared']} stray <img>, "
         f"apf_days={stats['apf_days_filled']}, m2={stats['m2_filled']}, "
-        f"m2sin_i={stats['m2sin_i_filled']}, m2_at_i={stats['m2_at_i_filled']}, "
+        f"m2sin_i={stats['m2sin_i_filled']}, m2_at_i={stats['m2_at_i_filled']} "
+        f"(m2_at_i=m2sin_i for {stats['m2_at_i_equals_m2sin_i']}, often i≈90°), "
         f"next_rv={stats['next_rv_filled']} (from {stats['reports_loaded']} reports, "
         f"cache+summary incl patches={stats['cache_enriched_from_summaries']})"
     )
