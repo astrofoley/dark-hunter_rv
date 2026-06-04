@@ -240,13 +240,9 @@ def parse_next_rv_cell_to_mjd(value: str) -> Optional[float]:
     m = re.match(r"^(\d{4})/(\d{1,2})/(\d{1,2})$", s)
     if m:
         try:
-            return float(
-                Time(
-                    {"year": int(m.group(1)), "month": int(m.group(2)), "day": int(m.group(3))},
-                    format="ymd",
-                    scale="utc",
-                ).mjd
-            )
+            y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            iso = f"{y:04d}-{mo:02d}-{d:02d}"
+            return float(Time(iso, format="iso", scale="utc").mjd)
         except Exception:
             return None
     try:
