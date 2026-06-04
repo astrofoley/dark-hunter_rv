@@ -215,7 +215,7 @@ import json
 import os
 from pathlib import Path
 
-from fit_apf_rv_keplerian import website_table_masses_from_report
+from fit_apf_rv_keplerian import lookup_fit_report_by_gaia_id, website_table_masses_from_report
 from darkhunter_rv.website_table_csv import (
     days_since_last_apf_from_summary,
     format_next_rv_event_cell,
@@ -283,9 +283,12 @@ for r in data_rows:
                 r.append("")
             r[apf_days_i] = f"{age:.2f}"
 
-    if sid in reports:
-        rep = reports[sid]
-        masses = website_table_masses_from_report(rep)
+    rep = lookup_fit_report_by_gaia_id(reports, sid)
+    if rep is not None:
+        masses = website_table_masses_from_report(
+            rep,
+            summary_path=summ if summ.is_file() else None,
+        )
         m2_astro = masses["m2_msun"]
         m2s = masses["m2sin_i_msun"]
         m2i = masses["m2_at_i_msun"]

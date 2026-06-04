@@ -8,7 +8,7 @@ import csv
 import json
 from pathlib import Path
 
-from fit_apf_rv_keplerian import website_table_masses_from_report
+from fit_apf_rv_keplerian import lookup_fit_report_by_gaia_id, website_table_masses_from_report
 from darkhunter_rv.website_table_csv import (
     days_since_last_apf_from_summary,
     format_next_rv_event_cell,
@@ -54,6 +54,8 @@ def update_table_columns(
 
     n_apf_days = 0
     n_m2 = 0
+    n_m2sini = 0
+    n_m2_at_i = 0
     n_next = 0
     target = (gaia_id or "").strip()
     for r in data_rows:
@@ -75,10 +77,10 @@ def update_table_columns(
                 r[apf_days_i] = f"{age:.2f}"
                 n_apf_days += 1
 
-        if sid not in reports:
+        rep = lookup_fit_report_by_gaia_id(reports, sid)
+        if rep is None:
             continue
-        rep = reports[sid]
-        masses = website_table_masses_from_report(rep)
+        masses = website_table_masses_from_report(rep, summary_path=summ if summ.is_file() else None)
         if masses["m2_msun"] is not None:
             while len(r) <= m2_i:
                 r.append("")
@@ -88,10 +90,12 @@ def update_table_columns(
             while len(r) <= m2sini_i:
                 r.append("")
             r[m2sini_i] = f"{masses['m2sin_i_msun']:.5f}"
+            n_m2sini += 1
         if masses["m2_at_i_msun"] is not None:
             while len(r) <= m2over_i:
                 r.append("")
             r[m2over_i] = f"{masses['m2_at_i_msun']:.5f}"
+            n_m2_at_i += 1
         nxt = next_rv_event_from_fit_report(rep)
         if nxt is not None:
             while len(r) <= next_rv_i:
@@ -115,6 +119,8 @@ def update_table_columns(
         "stray_img_cleared": n_stray,
         "apf_days_filled": n_apf_days,
         "m2_filled": n_m2,
+        "m2sin_i_filled": n_m2sini,
+        "m2_at_i_filled": n_m2_at_i,
         "next_rv_filled": n_next,
         "reports_loaded": len(reports),
     }
@@ -157,6 +163,7 @@ def main() -> int:
         f"updated {args.data_csv}: {stats['data_rows']} rows, {stats['columns']} columns, "
         f"cleared {stats['stray_img_cleared']} stray <img>, "
         f"apf_days={stats['apf_days_filled']}, m2={stats['m2_filled']}, "
+        f"m2sin_i={stats['m2sin_i_filled']}, m2_at_i={stats['m2_at_i_filled']}, "
         f"next_rv={stats['next_rv_filled']} (from {stats['reports_loaded']} reports)"
     )
     return 0
