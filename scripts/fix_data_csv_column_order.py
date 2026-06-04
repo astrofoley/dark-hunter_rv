@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Repair tables/data.csv column alignment and clear stale plot HTML."""
+"""Repair tables/data.csv after header-only column reorder (restores row alignment)."""
 
 from __future__ import annotations
 
@@ -37,6 +37,7 @@ def main() -> int:
         f"fixed: {path} ({len(rows) - 1} data rows, {len(hdr)} columns, "
         f"cleared {n_stray} stray <img> cells)"
     )
+    print("For mass/APF/next-RV values too, run: bash scripts/repair_website_table.sh")
     return 0
 
 
