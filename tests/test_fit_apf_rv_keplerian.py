@@ -296,6 +296,57 @@ def test_resolve_m1_defaults_when_free_fit_present() -> None:
     assert fitmod.resolve_m1_msun_for_rv_mass(rep) == pytest.approx(1.0)
 
 
+def test_resolve_inclination_from_summary_metadata(tmp_path: Path) -> None:
+    summ = tmp_path / "Gaia_DR3_99_summary.txt"
+    summ.write_text(
+        "[GAIA METADATA]\n"
+        "Source_ID: 99\n"
+        "RA: 1.0\n"
+        "Dec: 2.0\n"
+        "Inclination: 60.0\n"
+        "\n[PIPELINE RESULTS]\n"
+        "ep_1.txt 60000 -1 0.1 0.2 False\n"
+    )
+    rep = {"gaia_source_id": "99"}
+    assert fitmod.resolve_inclination_deg_for_rv_mass(rep, summary_path=summ) == pytest.approx(60.0)
+
+
+def test_website_table_masses_m2_at_i_from_inclination(tmp_path: Path) -> None:
+    summ = tmp_path / "Gaia_DR3_99_summary.txt"
+    summ.write_text(
+        "[GAIA METADATA]\n"
+        "Source_ID: 99\n"
+        "RA: 1.0\n"
+        "Dec: 2.0\n"
+        "M1: 1.0\n"
+        "Inclination: 90.0\n"
+        "\n[PIPELINE RESULTS]\n"
+        "ep_1.txt 60000 -1 0.1 0.2 False\n"
+    )
+    rep = {
+        "gaia_source_id": "99",
+        "fit_variants": {
+            "free": {"P_days": 10.0, "K_kms": 40.0, "e": 0.1, "mass_function_msun": 0.05},
+        },
+    }
+    cols = fitmod.website_table_masses_from_report(rep, summary_path=summ)
+    assert cols["m2sin_i_msun"] is not None
+    assert cols["m2_at_i_msun"] is not None
+    assert cols["m2_at_i_msun"] == pytest.approx(cols["m2sin_i_msun"], rel=1e-4)
+
+
+def test_website_table_masses_m2_at_i_fallback_equals_m2sin(tmp_path: Path) -> None:
+    rep = {
+        "gaia_source_id": "99",
+        "fit_variants": {
+            "free": {"P_days": 10.0, "K_kms": 40.0, "e": 0.1, "mass_function_msun": 0.05},
+        },
+    }
+    cols = fitmod.website_table_masses_from_report(rep, summary_path=None)
+    assert cols["m2sin_i_msun"] is not None
+    assert cols["m2_at_i_msun"] == pytest.approx(cols["m2sin_i_msun"])
+
+
 def test_website_table_masses_with_teff_fallback(tmp_path: Path) -> None:
     summ = tmp_path / "Gaia_DR3_99_summary.txt"
     summ.write_text(
