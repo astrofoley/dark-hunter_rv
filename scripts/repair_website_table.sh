@@ -13,8 +13,10 @@
 #   git pull   # needs PR #22+ (website_table_csv.py, script.js)
 #   bash scripts/repair_website_table.sh
 #
-# Then later:
-#   bash scripts/full_website_refresh.sh
+# Three operational commands (see docs/website.md):
+#   bash scripts/update_hbeta_website.sh              # Hβ + stage only
+#   screen ... bash scripts/full_website_refresh.sh   # per-star pipeline+fit+site
+#   screen ... bash scripts/refit_all_per_object.sh   # same (no CSV repair preamble)
 
 set -euo pipefail
 

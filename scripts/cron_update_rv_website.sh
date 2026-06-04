@@ -24,6 +24,8 @@ RUN_PIPELINE="${RUN_PIPELINE:-1}"
 
 mkdir -p "$(dirname "$LOG")" "$OUT" "$REPO/logs"
 cd "$REPO"
+# shellcheck source=scripts/lib/spec_find_patterns.sh
+source "$REPO/scripts/lib/spec_find_patterns.sh"
 export PYTHONPATH="$REPO"
 export DARKHUNTER_OUTPUT_DIR="$OUT"
 export WEB_ROOT OUT SPEC_ROOT MIN_POINTS
@@ -36,7 +38,7 @@ echo "=== $(date -Is) cron_update_rv_website start (pid $$) ==="
 # 1) Pipeline: new/changed spectra (--update skips unchanged). Updates summaries in output/.
 if [[ "$RUN_PIPELINE" == "1" && -d "$SPEC_ROOT" ]]; then
   echo "=== Pipeline --update on $SPEC_ROOT ==="
-  find "$SPEC_ROOT" -type f \( -name '*_ap1.flm' -o -name '*_ap1.txt' -o -name '*.fits' \) -print0 2>/dev/null \
+  find_apf_spectra_print0 "$SPEC_ROOT" \
     | xargs -0 -r "$PY" -m darkhunter_rv.pipeline --instrument APF --update --plots --plots-focus 2>/dev/null \
     || echo "[WARN] pipeline pass had errors (continuing)"
 elif [[ "$RUN_PIPELINE" == "1" ]]; then
