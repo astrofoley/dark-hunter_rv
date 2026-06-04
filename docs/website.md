@@ -147,11 +147,20 @@ PYTHONPATH=. python3 scripts/build_hbeta_website_plots.py \
 1. **Pipeline** `--update` on `SPEC_ROOT` (new/changed `.flm` / `.txt` / `.fits` only).
 2. **Populate**: Keplerian fits (≥`MIN_POINTS`, literature included, bad RVs filtered), RV/Hβ plots, `data.csv` mass columns, staging to `WEB_ROOT`. Skips refit when the JSON is newer than the summary (`FIT_FORCE=0`).
 
-Install crontab (`crontab -e`):
+Install crontab: run **`crontab -e`** alone (do not put the schedule on the same shell line), then add:
 
 ```cron
-0 6 * * * REPO=/data2/darkhunter/dark-hunter_rv WEB_ROOT=/var/www/html/darkhunter/rv SPEC_ROOT=/data2/gaia_stars/apf_reductions MIN_POINTS=5 /bin/bash $REPO/scripts/cron_update_rv_website.sh >> $REPO/logs/cron_rv_website.log 2>&1
+# Optional defaults for all jobs on this machine:
+REPO=/data2/darkhunter/dark-hunter_rv
+WEB_ROOT=/var/www/html/darkhunter/rv
+SPEC_ROOT=/data2/gaia_stars/apf_reductions
+MIN_POINTS=5
+
+# 10:00 daily — use absolute path to the script (no >> $REPO/... on the job line)
+0 10 * * * /bin/bash /data2/darkhunter/dark-hunter_rv/scripts/cron_update_rv_website.sh
 ```
+
+Do **not** use `>> $REPO/logs/...` on the same line as `REPO=/path/...`; cron expands `$REPO` in redirects before that assignment, which yields `/logs/cron_rv_website.log`. The script logs to `$REPO/logs/cron_rv_website.log` internally.
 
 Manual test:
 
