@@ -6,9 +6,14 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import warnings
 from pathlib import Path
 
-from fit_apf_rv_keplerian import lookup_fit_report_by_gaia_id, website_table_masses_from_report
+from fit_apf_rv_keplerian import (
+    _load_json_cache,
+    lookup_fit_report_by_gaia_id,
+    website_table_masses_from_report,
+)
 from darkhunter_rv.website_table_csv import (
     days_since_last_apf_from_summary,
     format_next_rv_event_cell,
@@ -19,12 +24,23 @@ from darkhunter_rv.website_table_csv import (
 )
 
 
+def load_gaia_nss_cache(reports_dir: Path) -> dict:
+    for path in (
+        reports_dir / "gaia_nss_cache.json",
+        reports_dir.parent / "rv_fit_reports" / "gaia_nss_cache.json",
+    ):
+        if path.is_file():
+            return _load_json_cache(path)
+    return {}
+
+
 def update_table_columns(
     data_csv: Path,
     *,
     out_dir: Path,
     reports_dir: Path,
     gaia_id: str | None = None,
+    gaia_cache: dict | None = None,
 ) -> dict[str, int]:
     rows: list[list[str]] = []
     with data_csv.open(newline="", encoding="utf-8") as fh:
@@ -42,6 +58,9 @@ def update_table_columns(
     m2over_i = hdr.index("(M2sin i)/(sin i) (Msun)")
     apf_days_i = hdr.index("DAYS SINCE LAST APF")
     next_rv_i = hdr.index("NEXT RV EVENT (DATE)")
+
+    if gaia_cache is None:
+        gaia_cache = load_gaia_nss_cache(reports_dir)
 
     reports: dict[str, dict] = {}
     if reports_dir.is_dir():
@@ -80,7 +99,11 @@ def update_table_columns(
         rep = lookup_fit_report_by_gaia_id(reports, sid)
         if rep is None:
             continue
-        masses = website_table_masses_from_report(rep, summary_path=summ if summ.is_file() else None)
+        masses = website_table_masses_from_report(
+            rep,
+            summary_path=summ if summ.is_file() else None,
+            gaia_cache=gaia_cache,
+        )
         if masses["m2_msun"] is not None:
             while len(r) <= m2_i:
                 r.append("")
@@ -127,6 +150,13 @@ def update_table_columns(
 
 
 def main() -> int:
+    try:
+        from erfa import ErfaWarning  # type: ignore
+
+        warnings.filterwarnings("ignore", category=ErfaWarning)
+    except Exception:
+        pass
+
     ap = argparse.ArgumentParser(
         description="Normalize data.csv and fill schedule/mass columns from existing assets (no refit)."
     )
@@ -153,11 +183,13 @@ def main() -> int:
     repo = Path(__file__).resolve().parents[1]
     out_dir = Path(args.output_dir) if args.output_dir else repo / "output"
     reports_dir = Path(args.reports_dir) if args.reports_dir else repo / "rv_fit_reports"
+    gaia_cache = load_gaia_nss_cache(reports_dir)
     stats = update_table_columns(
         Path(args.data_csv),
         out_dir=out_dir,
         reports_dir=reports_dir,
         gaia_id=args.gaia_id,
+        gaia_cache=gaia_cache,
     )
     print(
         f"updated {args.data_csv}: {stats['data_rows']} rows, {stats['columns']} columns, "

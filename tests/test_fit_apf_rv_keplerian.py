@@ -286,6 +286,38 @@ def test_parse_m1_from_gaia_metadata_block(tmp_path: Path) -> None:
     assert priors["inclination_deg"] == pytest.approx(60.0)
 
 
+def test_resolve_m1_defaults_when_free_fit_present() -> None:
+    rep = {
+        "gaia_source_id": "99",
+        "fit_variants": {
+            "free": {"P_days": 10.0, "K_kms": 40.0, "e": 0.1, "mass_function_msun": 0.05},
+        },
+    }
+    assert fitmod.resolve_m1_msun_for_rv_mass(rep) == pytest.approx(1.0)
+
+
+def test_website_table_masses_with_teff_fallback(tmp_path: Path) -> None:
+    summ = tmp_path / "Gaia_DR3_99_summary.txt"
+    summ.write_text(
+        "[GAIA METADATA]\n"
+        "Source_ID: 99\n"
+        "RA: 1.0\n"
+        "Dec: 2.0\n"
+        "Teff: 5772.0\n"
+        "logg: 4.44\n"
+        "\n[PIPELINE RESULTS]\n"
+        "ep_1.txt 60000 -1 0.1 0.2 False\n"
+    )
+    rep = {
+        "gaia_source_id": "99",
+        "fit_variants": {
+            "free": {"P_days": 10.0, "K_kms": 40.0, "e": 0.1, "mass_function_msun": 0.05},
+        },
+    }
+    cols = fitmod.website_table_masses_from_report(rep, summary_path=summ)
+    assert cols["m2sin_i_msun"] is not None
+
+
 def test_website_table_masses_recompute_from_free_fit(tmp_path: Path) -> None:
     summ = tmp_path / "Gaia_DR3_99_summary.txt"
     summ.write_text(
