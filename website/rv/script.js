@@ -291,6 +291,8 @@ async function refreshLastUpdatedFromWebsiteFiles() {
     renderLastUpdated();
 }
 
+const PLOT_HEADERS_FROM_GAIA_ID = new Set(["RV PLOT", "RV FIT", "FLUX PLOT"]);
+
 function buildMediaCellHtml(text) {
     if (typeof text !== "string") {
         return text;
@@ -301,9 +303,16 @@ function buildMediaCellHtml(text) {
         return text;
     }
 
-    const srcMatch = trimmed.match(/src=['"]([^'"]+)['"]/i);
+    let inner = trimmed;
+    const anchorMatch = trimmed.match(/<a\b[^>]*>([\s\S]*)<\/a>/i);
+    if (anchorMatch && anchorMatch[1]) {
+        inner = anchorMatch[1];
+    }
+    const srcMatch = inner.match(/src=['"]([^'"]+)['"]/i);
     if (srcMatch && srcMatch[1]) {
-        return `<a href="${srcMatch[1]}" target="_blank" rel="noopener noreferrer">${trimmed}</a>`;
+        const href = srcMatch[1];
+        const imgOnly = inner.match(/<img\b/i) ? inner : `<img src="${href}" alt="plot">`;
+        return `<a href="${href}" target="_blank" rel="noopener noreferrer">${imgOnly}</a>`;
     }
 
     if (/^https?:\/\/\S+$/i.test(trimmed) && /\.(png|jpg|jpeg|gif|webp)(\?.*)?$/i.test(trimmed)) {
@@ -511,8 +520,9 @@ function isMediaHeader(headerName) {
 }
 
 function buildPlotImgCell(thumbSrc, detailSrc, altText) {
+    const base = detailSrc || thumbSrc;
     const thumb = `${thumbSrc}?v=${ASSET_CACHE_BUST}`;
-    const href = detailSrc || thumbSrc;
+    const href = `${base}?v=${ASSET_CACHE_BUST}`;
     return `<a href="${href}" target="_blank" rel="noopener noreferrer"><img src="${thumb}" alt="${altText}" onerror="this.closest('a').outerHTML='N/A';"></a>`;
 }
 
@@ -1449,7 +1459,12 @@ function arrayToTable(tableData) {
             ) {
                 text = Number(text).toFixed(5);
             }
-            if (i > 0 && isMediaHeader(headerName) && hasNonNAContent(text)) {
+            if (
+                i > 0
+                && isMediaHeader(headerName)
+                && hasNonNAContent(text)
+                && !PLOT_HEADERS_FROM_GAIA_ID.has(headerName)
+            ) {
                 text = buildMediaCellHtml(text);
             }
             const rvPlotCol = colIndex("RV PLOT");
