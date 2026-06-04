@@ -126,21 +126,50 @@ def load_nss_priors_from_summary(path: Path) -> Optional[Dict[str, float]]:
     return out
 
 
+def load_mass_priors_from_summary(path: Path) -> Dict[str, float]:
+    """M1 / M2 / inclination from [GAIA METADATA] (no NSS period requirement)."""
+    meta = _parse_gaia_metadata(path)
+    if not meta:
+        return {}
+    out: Dict[str, float] = {}
+    m1 = _meta_float(meta, "M1", "m1", "m1_msun", "Mass_Primary", "mass_primary")
+    m2 = _meta_float(meta, "M2", "m2", "m2_msun", "Mass_Secondary", "mass_secondary")
+    incl = _meta_float(meta, "Inclination", "inclination", "Inclination_Deg")
+    if m1 is not None and m1 > 0:
+        out["m1_msun"] = float(m1)
+    if m2 is not None and m2 > 0:
+        out["m2_msun"] = float(m2)
+    if incl is not None and np.isfinite(incl):
+        out["inclination_deg"] = float(incl)
+    return out
+
+
 def parse_m1_from_summary(path: Path) -> Optional[float]:
-    for line in path.read_text().splitlines():
-        if not line.startswith("#"):
-            continue
-        if "M1" not in line.upper():
-            continue
-        m = re.search(r"=\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)", line)
-        if not m:
-            continue
-        try:
-            val = float(m.group(1))
-        except ValueError:
-            continue
-        if np.isfinite(val) and val > 0:
-            return val
+    m1 = load_mass_priors_from_summary(path).get("m1_msun")
+    return float(m1) if m1 is not None and m1 > 0 else None
+
+
+def _free_fit_variant_report(report: dict) -> Optional[dict]:
+    variants = report.get("fit_variants")
+    if isinstance(variants, dict):
+        free = variants.get("free")
+        if isinstance(free, dict) and free.get("P_days") is not None:
+            return free
+    if report.get("P_days") is not None and report.get("K_kms") is not None:
+        return report
+    return None
+
+
+def lookup_fit_report_by_gaia_id(reports: Dict[str, dict], gaia_id: str) -> Optional[dict]:
+    """Match fit JSON keyed by numeric id or ``Gaia_DR3_<id>`` stem."""
+    sid = (gaia_id or "").strip()
+    if not sid:
+        return None
+    if sid in reports:
+        return reports[sid]
+    prefixed = f"Gaia_DR3_{sid}"
+    if prefixed in reports:
+        return reports[prefixed]
     return None
 
 
@@ -856,7 +885,11 @@ def _finite_mass_value(value: Any) -> Optional[float]:
     return None
 
 
-def website_table_masses_from_report(report: dict) -> Dict[str, Optional[float]]:
+def website_table_masses_from_report(
+    report: dict,
+    *,
+    summary_path: Optional[Path] = None,
+) -> Dict[str, Optional[float]]:
     """
     Map a Keplerian fit JSON report to website ``data.csv`` mass columns.
 
@@ -864,10 +897,35 @@ def website_table_masses_from_report(report: dict) -> Dict[str, Optional[float]]
     - ``m2sin_i_msun``: M2 sin i from the RV-only (free) fit and assumed M1.
     - ``m2_at_i_msun``: M2 at i from the RV-only f(M), assumed M1, and astrometric i.
     """
+    m2sin = _finite_mass_value(report.get("m2sini_msun"))
+    m2_at_i = _finite_mass_value(report.get("m2_given_inclination_msun"))
+
+    m1 = _finite_mass_value(report.get("used_m1_msun"))
+    incl_raw = report.get("inclination_deg_used")
+    incl = float(incl_raw) if isinstance(incl_raw, (int, float)) and np.isfinite(incl_raw) else None
+
+    if summary_path is not None:
+        meta_mass = load_mass_priors_from_summary(summary_path)
+        if m1 is None:
+            m1 = _finite_mass_value(meta_mass.get("m1_msun"))
+        if incl is None:
+            incl_meta = meta_mass.get("inclination_deg")
+            if incl_meta is not None and np.isfinite(incl_meta):
+                incl = float(incl_meta)
+
+    if m2sin is None or m2_at_i is None:
+        rep_free = _free_fit_variant_report(report)
+        if rep_free is not None and m1 is not None:
+            calc_sini, calc_at_i = rv_only_mass_estimates(rep_free, m1, incl)
+            if m2sin is None:
+                m2sin = _finite_mass_value(calc_sini)
+            if m2_at_i is None:
+                m2_at_i = _finite_mass_value(calc_at_i)
+
     return {
         "m2_msun": _finite_mass_value(report.get("used_m2_msun")),
-        "m2sin_i_msun": _finite_mass_value(report.get("m2sini_msun")),
-        "m2_at_i_msun": _finite_mass_value(report.get("m2_given_inclination_msun")),
+        "m2sin_i_msun": m2sin,
+        "m2_at_i_msun": m2_at_i,
     }
 
 
@@ -1338,6 +1396,12 @@ def run_one(
         fit_inclination_deg = gaia_nss.get("inclination_deg")
     if fit_m1_msun is None:
         fit_m1_msun = parse_m1_from_summary(summary_path)
+
+    mass_meta = load_mass_priors_from_summary(summary_path)
+    if fit_m1_msun is None:
+        fit_m1_msun = mass_meta.get("m1_msun")
+    if fit_inclination_deg is None:
+        fit_inclination_deg = mass_meta.get("inclination_deg")
 
     fit_variants = fit_all_variants(
         t,

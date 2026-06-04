@@ -268,6 +268,53 @@ def test_load_nss_priors_includes_inclination(tmp_path: Path) -> None:
     assert priors["inclination_deg"] == pytest.approx(74.5)
 
 
+def test_parse_m1_from_gaia_metadata_block(tmp_path: Path) -> None:
+    summ = tmp_path / "Gaia_DR3_99_summary.txt"
+    summ.write_text(
+        "[GAIA METADATA]\n"
+        "Source_ID: 99\n"
+        "RA: 1.0\n"
+        "Dec: 2.0\n"
+        "M1: 1.25\n"
+        "Inclination: 60.0\n"
+        "\n[PIPELINE RESULTS]\n"
+        "ep_1.txt 60000 -1 0.1 0.2 False\n"
+    )
+    assert fitmod.parse_m1_from_summary(summ) == pytest.approx(1.25)
+    priors = fitmod.load_mass_priors_from_summary(summ)
+    assert priors["m1_msun"] == pytest.approx(1.25)
+    assert priors["inclination_deg"] == pytest.approx(60.0)
+
+
+def test_website_table_masses_recompute_from_free_fit(tmp_path: Path) -> None:
+    summ = tmp_path / "Gaia_DR3_99_summary.txt"
+    summ.write_text(
+        "[GAIA METADATA]\n"
+        "Source_ID: 99\n"
+        "RA: 1.0\n"
+        "Dec: 2.0\n"
+        "M1: 1.0\n"
+        "Inclination: 90.0\n"
+        "\n[PIPELINE RESULTS]\n"
+        "ep_1.txt 60000 -1 0.1 0.2 False\n"
+    )
+    rep = {
+        "used_m2_msun": 0.55,
+        "fit_variants": {
+            "free": {"P_days": 10.0, "K_kms": 40.0, "e": 0.1, "mass_function_msun": 0.05},
+        },
+    }
+    cols = fitmod.website_table_masses_from_report(rep, summary_path=summ)
+    assert cols["m2sin_i_msun"] is not None
+    assert cols["m2_at_i_msun"] is not None
+    assert cols["m2sin_i_msun"] == pytest.approx(cols["m2_at_i_msun"], rel=1e-5)
+
+
+def test_lookup_fit_report_by_gaia_id() -> None:
+    reports = {"Gaia_DR3_123": {"P_days": 1.0}}
+    assert fitmod.lookup_fit_report_by_gaia_id(reports, "123") == reports["Gaia_DR3_123"]
+
+
 def test_website_table_masses_from_report_separates_sources() -> None:
     rep = {
         "used_m2_msun": 0.55,
