@@ -50,8 +50,15 @@ if [[ ! -f "$REPO/scripts/update_website_table_columns.py" ]]; then
   exit 2
 fi
 
+if [[ "${PREFETCH_GAIA_NSS:-0}" == "1" ]]; then
+  echo "=== Prefetch Gaia NSS (inclination, binary masses) for table stars ==="
+  PYTHONPATH=. "$PY" scripts/prefetch_gaia_nss_for_table.py \
+    --data-csv "$WEB_ROOT/tables/data.csv" \
+    --reports-dir "$REPORTS_DIR"
+fi
+
 echo "=== Normalize data.csv + fill columns from existing summaries/reports ==="
-echo "M2 sin i / M2 at i need M1 (gaia_nss_cache.json, Teff estimate, or 1 Msun default)."
+echo "M2 at i requires Gaia Inclination (summary [GAIA METADATA] or PREFETCH_GAIA_NSS=1); not copied from M2 sin i."
 "$PY" scripts/update_website_table_columns.py \
   --data-csv "$WEB_ROOT/tables/data.csv" \
   --output-dir "$OUT" \
