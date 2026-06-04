@@ -24,6 +24,7 @@ def update_table_columns(
     *,
     out_dir: Path,
     reports_dir: Path,
+    gaia_id: str | None = None,
 ) -> dict[str, int]:
     rows: list[list[str]] = []
     with data_csv.open(newline="", encoding="utf-8") as fh:
@@ -54,12 +55,15 @@ def update_table_columns(
     n_apf_days = 0
     n_m2 = 0
     n_next = 0
+    target = (gaia_id or "").strip()
     for r in data_rows:
         if not r:
             continue
         gaia = (r[gaia_i] if gaia_i < len(r) else "").strip()
         sid = gaia_id_from_row(gaia)
         if not sid:
+            continue
+        if target and sid != target:
             continue
 
         summ = out_dir / f"Gaia_DR3_{sid}_summary.txt"
@@ -134,6 +138,11 @@ def main() -> int:
         default=None,
         help="Keplerian JSON reports (default: REPO/rv_fit_reports)",
     )
+    ap.add_argument(
+        "--gaia-id",
+        default=None,
+        help="Update only this Gaia DR3 source id row (default: all rows).",
+    )
     args = ap.parse_args()
     repo = Path(__file__).resolve().parents[1]
     out_dir = Path(args.output_dir) if args.output_dir else repo / "output"
@@ -142,6 +151,7 @@ def main() -> int:
         Path(args.data_csv),
         out_dir=out_dir,
         reports_dir=reports_dir,
+        gaia_id=args.gaia_id,
     )
     print(
         f"updated {args.data_csv}: {stats['data_rows']} rows, {stats['columns']} columns, "

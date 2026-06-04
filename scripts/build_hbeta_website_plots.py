@@ -137,6 +137,19 @@ def build_overlay(
         color = cmap(frac)
         ax.plot(v, f, "-", lw=1.1, color=color, alpha=0.88, label=f"MJD {mjd:.1f}")
 
+    ax.set_xlim(-300.0, 300.0)
+    flux_in_win: list[np.ndarray] = []
+    for _mjd, v, f in curves:
+        m = np.isfinite(v) & np.isfinite(f) & (np.abs(v) <= 300.0)
+        if int(np.sum(m)) >= 3:
+            flux_in_win.append(f[m])
+    if flux_in_win:
+        pooled = np.concatenate(flux_in_win)
+        ylo, yhi = np.nanpercentile(pooled, [1.0, 99.0])
+        if np.isfinite(ylo) and np.isfinite(yhi) and yhi > ylo:
+            pad = 0.03 * (yhi - ylo)
+            ax.set_ylim(float(ylo - pad), float(yhi + pad))
+
     ax.set_xlabel("Velocity (km/s)")
     ax.set_ylabel("Normalized flux")
     sid = parse_object_id_from_summary(summary_path) or summary_path.stem

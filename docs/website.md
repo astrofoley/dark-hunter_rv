@@ -80,22 +80,54 @@ Ensure Apache serves `/var/www/html/darkhunter/rv/` (existing `Alias` or symlink
 | **M2sin i (Msun)** | RV-only Keplerian fit, with assumed M1 |
 | **(M2sin i)/(sin i) (Msun)** | Same RV-only f(M) and M1, with Gaia astrometric inclination |
 
-```bash
-cd /data2/darkhunter/dark-hunter_rv
+## Three commands (ziggy)
 
-# Regenerate everything (≥5 epochs per star, literature included in fits)
-WEB_ROOT=/var/www/html/darkhunter/rv MIN_POINTS=5 FIT_FORCE=1 bash scripts/populate_website.sh
+Paths assume `REPO=/data2/darkhunter/dark-hunter_rv`, `WEB_ROOT=/var/www/html/darkhunter/rv`, `SPEC_ROOT=/data2/gaia_stars/apf_reductions`.
+
+### 1 — Hβ plots + website staging (fast; no pipeline, no refit)
+
+Rebuilds `Gaia_DR3_<id>_28_hbeta.png` (−300…+300 km/s, flux 1–99%), copies star trees to `WEB_ROOT`, rsyncs reports. Summaries must already be complete.
+
+```bash
+cd /data2/darkhunter/dark-hunter_rv && git pull
+bash scripts/update_hbeta_website.sh
+# optional: deploy script.js/style.css too
+DEPLOY_STATIC=1 bash scripts/update_hbeta_website.sh
 ```
 
-### Full overnight refresh (detached screen)
+### 2 — Full refit in detached screen (per-star pipeline → fit → Hβ → live website row)
 
-Refits every star with **≥5** valid epochs (pipeline + literature; drops −9999 / NaN / |RV|≥5000 km/s), **force**-rebuilds all Keplerian and Hβ plots, repairs `data.csv`, and stages to the website. Run after merging website fixes (#19+):
+Repairs `data.csv` columns, deploys static assets, then **`refit_all_per_object.sh`**: for each star, analyze all `Gaia_DR3_*_epoch_*.txt` spectra, run Keplerian fit, rebuild plots/Hβ, **stage that star and update its table row immediately**.
 
 ```bash
 screen -dmS darkhunter_full_refresh bash -lc '
   REPO=/data2/darkhunter/dark-hunter_rv
   cd "$REPO" && git pull && bash scripts/full_website_refresh.sh
 '
+```
+
+Log: `logs/full_website_refresh.log`, `logs/refit_all_per_object.log`
+
+### 3 — Per-object refit only (same star-by-star website updates; no CSV layout repair)
+
+Use when static site / `data.csv` columns are already correct. Cron now includes `Gaia_DR3_*_epoch_*.txt` in pipeline discovery (not only `*_ap1.*`).
+
+```bash
+screen -dmS darkhunter_per_object bash -lc '
+  REPO=/data2/darkhunter/dark-hunter_rv
+  cd "$REPO" && git pull && bash scripts/refit_all_per_object.sh
+'
+```
+
+Single-star test: `STAR_ID=1551542027851147904 bash scripts/refit_all_per_object.sh`
+
+**Bulk alternative** (website updates only at the end): `bash scripts/full_website_refresh_bulk.sh`
+
+### Populate from existing summaries only (no pipeline)
+
+```bash
+cd /data2/darkhunter/dark-hunter_rv
+WEB_ROOT=/var/www/html/darkhunter/rv MIN_POINTS=5 FIT_FORCE=1 bash scripts/populate_website.sh
 ```
 
 Attach: `screen -r darkhunter_full_refresh` — Detach: `Ctrl-a d`  
@@ -128,11 +160,9 @@ bash scripts/repair_website_table.sh
 
 Hard-refresh the browser (Cmd+Shift+R). This deploys `script.js`, fixes column alignment, clears stray plot HTML, and fills **DAYS SINCE LAST APF** / mass / **NEXT RV EVENT** from existing summaries and `rv_fit_reports` JSON if they are already on disk.
 
-### Step 2 — Full refresh when ready (long: refit + all plots + Hβ + staging)
+### Step 2 — Full refresh when ready
 
-```bash
-bash scripts/full_website_refresh.sh
-```
+Same as **command 2** above (`full_website_refresh.sh` → per-star `refit_all_per_object.sh`). Use when summaries are missing epochs (e.g. only four of nine `epoch_*.txt` in `[PIPELINE RESULTS]`).
 
 CSV-only normalize (no column value fill):
 
@@ -154,8 +184,10 @@ PYTHONPATH=. python3 scripts/build_hbeta_website_plots.py \
 
 `scripts/cron_update_rv_website.sh` runs:
 
-1. **Pipeline** `--update` on `SPEC_ROOT` (new/changed `.flm` / `.txt` / `.fits` only).
+1. **Pipeline** `--update` on `SPEC_ROOT` for `Gaia_DR3_*_epoch_*.txt`, `*_ap1.{flm,txt}`, and `*.fits` (skips spectra whose `*_diagnostics.csv` is newer than the input).
 2. **Populate**: Keplerian fits (≥`MIN_POINTS`, literature included, bad RVs filtered), RV/Hβ plots, `data.csv` mass columns, staging to `WEB_ROOT`. Skips refit when the JSON is newer than the summary (`FIT_FORCE=0`).
+
+**Missing epochs in summaries:** Cron used to match only `*_ap1.*` / `*.fits`, not `Gaia_DR3_*_epoch_*.txt`. Stars with only epoch `.txt` reductions (e.g. nine epochs on disk but four in `[PIPELINE RESULTS]`) need a one-time **`bash scripts/full_website_refresh.sh`** (`RUN_PIPELINE=1`, default), which runs the pipeline on all epoch files then refits. Incremental cron picks up new epoch `.txt` files after that.
 
 Install crontab: run **`crontab -e`** alone (do not put the schedule on the same shell line), then add:
 
