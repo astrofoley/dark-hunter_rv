@@ -6,16 +6,17 @@
 #   bash scripts/update_hbeta_website.sh
 #
 #   STAR_ID=1551542027851147904 bash scripts/update_hbeta_website.sh
-#   DEPLOY_STATIC=1 bash scripts/update_hbeta_website.sh   # also copy script.js / style.css
+#   DEPLOY_STATIC=0 bash scripts/update_hbeta_website.sh   # skip script.js deploy (not recommended)
 
 set -euo pipefail
 
 REPO="${REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
 export WEB_ROOT="${WEB_ROOT:-/var/www/html/darkhunter/rv}"
-export DEPLOY_STATIC="${DEPLOY_STATIC:-0}"
+export DEPLOY_STATIC="${DEPLOY_STATIC:-1}"
 
 cd "$REPO"
 if [[ "$DEPLOY_STATIC" == "1" ]]; then
+  echo "=== Deploy website/rv (script.js builds H-beta links by Gaia id) ==="
   bash scripts/setup_website.sh
 fi
 

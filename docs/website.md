@@ -91,9 +91,9 @@ Rebuilds `Gaia_DR3_<id>_28_hbeta.png` (−300…+300 km/s, flux 1–99%), copies
 ```bash
 cd /data2/darkhunter/dark-hunter_rv && git pull
 bash scripts/update_hbeta_website.sh
-# optional: deploy script.js/style.css too
-DEPLOY_STATIC=1 bash scripts/update_hbeta_website.sh
 ```
+
+Deploys `script.js` (table H-beta links always point at `Gaia_DR3_<id>_28_hbeta.png`, not legacy CSV URLs) and prunes old `*_h_beta_rv.png` files from `Plots/`.
 
 ### 2 — Full refit in detached screen (per-star pipeline → fit → Hβ → live website row)
 

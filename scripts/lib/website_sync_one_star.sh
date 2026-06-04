@@ -1,6 +1,9 @@
 # Stage one star into WEB_ROOT and refresh its data.csv row.
 # Requires: REPO, WEB_ROOT, OUT, REPORTS_DIR, PY, WEBSITE_STARS_DIR, DATA_CSV, run_cmd (optional DRY_RUN).
 
+# shellcheck source=scripts/lib/website_plot_sync.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/website_plot_sync.sh"
+
 website_sync_one_star() {
   local gid="${1:?gaia id required}"
   local summ="$OUT/Gaia_DR3_${gid}_summary.txt"
@@ -31,10 +34,7 @@ website_sync_one_star() {
 
   local src_plot_dir="$OUT/Gaia_DR3_${gid}"
   if [[ -d "$src_plot_dir" ]]; then
-    local p
-    while IFS= read -r -d '' p; do
-      run_cmd cp "$p" "$star_plots/$(basename "$p")"
-    done < <(find "$src_plot_dir" -maxdepth 1 -type f -name '*.png' -print0 2>/dev/null)
+    website_stage_gaia_plots "$gid" "$src_plot_dir" "$star_plots"
   elif [[ "${DRY_RUN:-0}" != "1" && -n "${MISSING_ASSETS_CSV:-}" ]]; then
     echo "${gid},missing_plot_dir,${src_plot_dir}" >> "$MISSING_ASSETS_CSV"
   fi

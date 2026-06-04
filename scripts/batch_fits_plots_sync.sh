@@ -18,6 +18,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/lib/website_plot_sync.sh
+source "$SCRIPT_DIR/lib/website_plot_sync.sh"
+
 REPO="${REPO:-/data2/darkhunter/dark-hunter_rv}"
 OUT="${OUT:-$REPO/output}"
 WEB_ROOT="${WEB_ROOT:-/var/www/html/darkhunter/rv}"
@@ -193,13 +197,9 @@ for summ in "${SUMMARY_FILES[@]}"; do
 
   src_plot_dir="$OUT/Gaia_DR3_${gid}"
   if [[ -d "$src_plot_dir" ]]; then
-    mapfile -t pngs < <(find "$src_plot_dir" -maxdepth 1 -type f -name '*.png' | sort)
-    if [[ "${#pngs[@]}" -gt 0 ]]; then
-      for p in "${pngs[@]}"; do
-        run_cmd cp "$p" "$star_plots/$(basename "$p")"
-        staged_plots=$((staged_plots + 1))
-      done
-    elif [[ "$DRY_RUN" != "1" ]]; then
+    n_plots=$(website_stage_gaia_plots "$gid" "$src_plot_dir" "$star_plots")
+    staged_plots=$((staged_plots + n_plots))
+    if [[ "$n_plots" -eq 0 && "$DRY_RUN" != "1" ]]; then
       echo "${gid},missing_plot_pngs,${src_plot_dir}" >> "$MISSING_ASSETS_CSV"
     fi
   elif [[ "$DRY_RUN" != "1" ]]; then
@@ -304,14 +304,18 @@ for r in data_rows:
                 r.append("")
             r[m2_i] = f"{m2_astro:.5f}"
             updated += 1
+        while len(r) <= m2sini_i:
+            r.append("")
         if m2s is not None:
-            while len(r) <= m2sini_i:
-                r.append("")
             r[m2sini_i] = f"{m2s:.5f}"
+        else:
+            r[m2sini_i] = ""
+        while len(r) <= m2over_i:
+            r.append("")
         if m2i is not None:
-            while len(r) <= m2over_i:
-                r.append("")
             r[m2over_i] = f"{m2i:.5f}"
+        else:
+            r[m2over_i] = ""
         nxt = next_rv_event_from_fit_report(rep)
         if nxt is not None:
             while len(r) <= next_rv_i:
