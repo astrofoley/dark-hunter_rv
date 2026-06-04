@@ -1127,8 +1127,20 @@ def website_table_masses_from_report(
             m2_at_i = _finite_mass_value(calc_at_i)
     if m2sin is None:
         m2sin = _finite_mass_value(report.get("m2sini_msun"))
-    if m2_at_i is None and incl is not None:
-        m2_at_i = _finite_mass_value(report.get("m2_given_inclination_msun"))
+    if m2_at_i is None:
+        stored_at_i = _finite_mass_value(report.get("m2_given_inclination_msun"))
+        stored_sin_json = _finite_mass_value(report.get("m2sini_msun"))
+        if stored_at_i is not None:
+            incl_used = report.get("inclination_deg_used")
+            has_fit_incl = isinstance(incl_used, (int, float)) and np.isfinite(incl_used)
+            if incl is not None or has_fit_incl:
+                m2_at_i = stored_at_i
+            elif (
+                stored_sin_json is not None
+                and abs(stored_at_i - stored_sin_json) > max(1e-6, 1e-4 * stored_sin_json)
+            ):
+                # Trust fit JSON when M2 at i was computed with real i (not a sin-i copy).
+                m2_at_i = stored_at_i
 
     return {
         "m2_msun": resolve_m2_astrometric_msun(
