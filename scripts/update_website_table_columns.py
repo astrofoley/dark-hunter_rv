@@ -11,6 +11,7 @@ from pathlib import Path
 
 from fit_apf_rv_keplerian import (
     _load_json_cache,
+    enrich_gaia_cache_from_summaries,
     lookup_fit_report_by_gaia_id,
     website_table_masses_from_report,
 )
@@ -61,6 +62,14 @@ def update_table_columns(
 
     if gaia_cache is None:
         gaia_cache = load_gaia_nss_cache(reports_dir)
+
+    gaia_ids = [
+        gaia_id_from_row((r[hdr.index("GAIA NAME")] if hdr.index("GAIA NAME") < len(r) else ""))
+        for r in data_rows
+        if r
+    ]
+    gaia_ids = [g for g in gaia_ids if g]
+    n_cache_summ = enrich_gaia_cache_from_summaries(gaia_cache, out_dir, gaia_ids=gaia_ids)
 
     reports: dict[str, dict] = {}
     if reports_dir.is_dir():
@@ -146,6 +155,7 @@ def update_table_columns(
         "m2_at_i_filled": n_m2_at_i,
         "next_rv_filled": n_next,
         "reports_loaded": len(reports),
+        "cache_enriched_from_summaries": n_cache_summ,
     }
 
 
@@ -196,7 +206,8 @@ def main() -> int:
         f"cleared {stats['stray_img_cleared']} stray <img>, "
         f"apf_days={stats['apf_days_filled']}, m2={stats['m2_filled']}, "
         f"m2sin_i={stats['m2sin_i_filled']}, m2_at_i={stats['m2_at_i_filled']}, "
-        f"next_rv={stats['next_rv_filled']} (from {stats['reports_loaded']} reports)"
+        f"next_rv={stats['next_rv_filled']} (from {stats['reports_loaded']} reports, "
+        f"cache+summary incl patches={stats['cache_enriched_from_summaries']})"
     )
     return 0
 

@@ -1027,6 +1027,46 @@ def resolve_inclination_deg_for_rv_mass(
     return None
 
 
+def enrich_gaia_cache_from_summaries(
+    gaia_cache: Dict[str, Any],
+    out_dir: Path,
+    *,
+    gaia_ids: Optional[List[str]] = None,
+) -> int:
+    """Merge [GAIA METADATA] masses/inclination from star summaries into the NSS cache dict."""
+    n = 0
+    if gaia_ids is None:
+        paths = sorted(out_dir.glob("Gaia_DR3_*_summary.txt"))
+    else:
+        paths = [out_dir / f"Gaia_DR3_{gid}_summary.txt" for gid in gaia_ids]
+    for summ in paths:
+        if not summ.is_file():
+            continue
+        sid_m = re.search(r"Gaia_DR3_(\d{18,19})", summ.name)
+        if not sid_m:
+            continue
+        sid = sid_m.group(1)
+        priors = load_mass_priors_from_summary(summ)
+        if not priors:
+            continue
+        entry = gaia_cache.get(sid)
+        if not isinstance(entry, dict) or entry.get("_none"):
+            entry = {}
+            gaia_cache[sid] = entry
+        patched = False
+        for key in ("m1_msun", "m2_msun", "inclination_deg"):
+            val = priors.get(key)
+            if val is None or not np.isfinite(val):
+                continue
+            if key == "inclination_deg" and _valid_inclination_deg(val) is None:
+                continue
+            entry[key] = float(val)
+            patched = True
+        if patched:
+            n += 1
+    return n
+
+
 def resolve_m2_astrometric_msun(
     report: dict,
     *,
@@ -1070,28 +1110,25 @@ def website_table_masses_from_report(
     - ``m2sin_i_msun``: M2 sin i from the RV-only (free) fit and assumed M1.
     - ``m2_at_i_msun``: M2 at i from the RV-only f(M), assumed M1, and astrometric i.
     """
-    m2sin = _finite_mass_value(report.get("m2sini_msun"))
-    m2_at_i = _finite_mass_value(report.get("m2_given_inclination_msun"))
-
     incl = resolve_inclination_deg_for_rv_mass(
         report, summary_path=summary_path, gaia_cache=gaia_cache
     )
-
     m1 = resolve_m1_msun_for_rv_mass(
         report, summary_path=summary_path, gaia_cache=gaia_cache
     )
 
-    if m2sin is None or m2_at_i is None:
-        rep_free = _free_fit_variant_report(report)
-        if rep_free is not None and m1 is not None:
-            calc_sini, calc_at_i = rv_only_mass_estimates(rep_free, m1, incl)
-            if m2sin is None:
-                m2sin = _finite_mass_value(calc_sini)
-            if m2_at_i is None:
-                m2_at_i = _finite_mass_value(calc_at_i)
-            # If M2 sin i is known but Gaia i is not, use i = 90° (M2 at i = M2 sin i).
-            if m2_at_i is None and m2sin is not None and incl is None:
-                m2_at_i = float(m2sin)
+    m2sin: Optional[float] = None
+    m2_at_i: Optional[float] = None
+    rep_free = _free_fit_variant_report(report)
+    if rep_free is not None and m1 is not None:
+        calc_sini, calc_at_i = rv_only_mass_estimates(rep_free, m1, incl)
+        m2sin = _finite_mass_value(calc_sini)
+        if incl is not None:
+            m2_at_i = _finite_mass_value(calc_at_i)
+    if m2sin is None:
+        m2sin = _finite_mass_value(report.get("m2sini_msun"))
+    if m2_at_i is None and incl is not None:
+        m2_at_i = _finite_mass_value(report.get("m2_given_inclination_msun"))
 
     return {
         "m2_msun": resolve_m2_astrometric_msun(
