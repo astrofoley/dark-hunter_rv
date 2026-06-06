@@ -480,6 +480,39 @@ def test_website_table_masses_from_report_separates_sources() -> None:
     assert cols["m2_at_i_msun"] == pytest.approx(0.48)
 
 
+def test_table_m1_overrides_default_and_nss() -> None:
+    rep = {
+        "gaia_source_id": "99",
+        "used_m1_msun": 0.8,
+        "gaia_nss": {"m1_msun": 0.9},
+        "fit_variants": {
+            "free": {"P_days": 10.0, "K_kms": 40.0, "e": 0.1, "mass_function_msun": 0.05},
+        },
+    }
+    cols_default = fitmod.website_table_masses_from_report(rep)
+    cols_table = fitmod.website_table_masses_from_report(rep, table_m1_msun=1.5)
+    assert cols_default["m2sin_i_msun"] is not None
+    assert cols_table["m2sin_i_msun"] is not None
+    assert cols_table["m2sin_i_msun"] != cols_default["m2sin_i_msun"]
+
+
+def test_fix_period_seeded_from_free_fit() -> None:
+    rng = np.random.default_rng(42)
+    p_true = 12.0
+    t = np.sort(rng.uniform(60000, 60120, 18))
+    y = 30.0 * np.sin(2 * np.pi * t / p_true) + rng.normal(0, 2.0, size=t.size)
+    yerr = np.full_like(y, 2.0)
+    gaia_nss = {"period_days": p_true, "eccentricity": 0.05}
+    variants = fitmod.fit_all_variants(t, y, yerr, gaia_nss, period_min=1.0, period_max=100.0, period_prior_sigma=0.15)
+    assert "free" in variants
+    assert "fix_period" in variants
+    assert "fix_period_ecc" in variants
+    free_rep = variants["free"][1]
+    fp_rep = variants["fix_period"][1]
+    assert fp_rep["chi2_red"] <= 2.5 * free_rep["chi2_red"] + 0.05
+    assert abs(fp_rep["e"] - free_rep["e"]) < 0.25
+
+
 def test_rv_only_mass_estimates_use_free_fit() -> None:
     rep_free = {"P_days": 10.0, "K_kms": 40.0, "e": 0.1, "mass_function_msun": 0.05}
     m2s, m2i = fitmod.rv_only_mass_estimates(rep_free, m1_msun=1.0, inclination_deg=90.0)
