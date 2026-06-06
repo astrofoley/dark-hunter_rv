@@ -12,7 +12,7 @@ from darkhunter_rv.thiele_innes_inclination import (
     metadata_inclination_is_missing,
     thiele_innes_from_metadata,
 )
-from fit_apf_rv_keplerian import discover_summary_files, parse_object_id_from_summary
+from darkhunter_rv.summary_paths import discover_summary_files, parse_object_id_from_summary
 from darkhunter_rv.gaia_utils import parse_gaia_metadata_from_star_summary
 
 

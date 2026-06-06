@@ -11,7 +11,7 @@ from pathlib import Path
 
 from darkhunter_rv.apf_observability import observability_for_summary
 from darkhunter_rv.website_table_csv import gaia_id_from_row
-from fit_apf_rv_keplerian import discover_summary_path
+from darkhunter_rv.summary_paths import discover_summary_path
 
 
 def main() -> int:
