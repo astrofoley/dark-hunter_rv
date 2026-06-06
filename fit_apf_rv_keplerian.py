@@ -183,7 +183,7 @@ def _load_json_cache(path: Path) -> Dict[str, Any]:
         return {}
 
 
-def load_observability_window(source_id: Optional[str], cache_path: Optional[Path]) -> Optional[Dict[str, str]]:
+def load_observability_window(source_id: Optional[str], cache_path: Optional[Path]) -> Optional[Dict[str, Any]]:
     if source_id is None or cache_path is None or (not cache_path.exists()):
         return None
     data = _load_json_cache(cache_path)
@@ -192,9 +192,30 @@ def load_observability_window(source_id: Optional[str], cache_path: Optional[Pat
         return None
     s = row.get("next_window_start_date")
     e = row.get("next_window_end_date")
+    windows = row.get("windows")
+    circumpolar = bool(row.get("circumpolar", False))
+    if isinstance(windows, list) and windows:
+        out: Dict[str, Any] = {
+            "windows": windows,
+            "circumpolar": circumpolar,
+        }
+        if isinstance(s, str) and s and isinstance(e, str) and e:
+            out["start_date"] = s
+            out["end_date"] = e
+        else:
+            w0 = windows[0]
+            if isinstance(w0, dict):
+                out["start_date"] = w0.get("start_date", "")
+                out["end_date"] = windows[-1].get("end_date", "") if isinstance(windows[-1], dict) else ""
+        return out if out.get("start_date") and out.get("end_date") else None
     if not isinstance(s, str) or not isinstance(e, str) or (not s) or (not e):
         return None
-    return {"start_date": s, "end_date": e}
+    return {
+        "start_date": s,
+        "end_date": e,
+        "circumpolar": circumpolar,
+        "windows": [{"start_date": s, "end_date": e}],
+    }
 
 
 def _save_json_cache(path: Path, data: Dict[str, Any]) -> None:
@@ -635,6 +656,7 @@ def fit_keplerian(
     period_prior_sigma: float = 0.15,
     fix_period: Optional[float] = None,
     fix_e: Optional[float] = None,
+    initial_params: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, dict]:
     t = np.asarray(t, dtype=float)
     y = np.asarray(y, dtype=float)
@@ -729,6 +751,13 @@ def fit_keplerian(
     if not np.isfinite(f_scale) or f_scale <= 0:
         f_scale = 1.0
 
+    x0_candidates: List[np.ndarray] = []
+    if initial_params is not None:
+        seed = _clip_initial_guess(np.asarray(initial_params, dtype=float), lower, upper)
+        if fix_period is not None:
+            seed[0] = np.log(float(np.clip(fix_period, min_period, max_period)))
+        x0_candidates.append(seed)
+
     for p0 in uniq_periods:
         log_p = np.log(np.clip(p0, min_period, max_period))
         if not np.isfinite(log_p):
@@ -745,6 +774,14 @@ def fit_keplerian(
             lower,
             upper,
         )
+        x0_candidates.append(x0)
+
+    seen_x0: set = set()
+    for x0 in x0_candidates:
+        key = tuple(np.round(x0, 5))
+        if key in seen_x0:
+            continue
+        seen_x0.add(key)
         try:
             res = least_squares(
                 resid,
@@ -925,13 +962,18 @@ def resolve_m1_msun_for_rv_mass(
     *,
     summary_path: Optional[Path] = None,
     gaia_cache: Optional[Dict[str, Any]] = None,
+    table_m1_msun: Optional[float] = None,
 ) -> Optional[float]:
     """
     Primary mass for converting RV f(M) to M2 sin i / M2 at i.
 
-    Order: fit report → embedded gaia_nss → gaia_nss_cache.json → summary metadata →
-    M2/Mass_Ratio → Teff/logg estimate → 1 Msun if a free RV fit exists.
+    Order: website table M1 (luminous) → fit report → embedded gaia_nss → cache →
+    summary metadata → M2/Mass_Ratio → Teff/logg estimate → 1 Msun if free fit exists.
     """
+    m1 = _finite_mass_value(table_m1_msun)
+    if m1 is not None:
+        return m1
+
     m1 = _finite_mass_value(report.get("used_m1_msun"))
     if m1 is not None:
         return m1
@@ -1052,16 +1094,19 @@ def enrich_gaia_cache_from_summaries(
     """Merge [GAIA METADATA] masses/inclination from star summaries into the NSS cache dict."""
     n = 0
     if gaia_ids is None:
-        paths = sorted(out_dir.glob("Gaia_DR3_*_summary.txt"))
+        paths = discover_summary_files(out_dir)
     else:
-        paths = [out_dir / f"Gaia_DR3_{gid}_summary.txt" for gid in gaia_ids]
+        paths = []
+        for gid in gaia_ids:
+            p = discover_summary_path(out_dir, gid)
+            if p is not None:
+                paths.append(p)
     for summ in paths:
         if not summ.is_file():
             continue
-        sid_m = re.search(r"Gaia_DR3_(\d{18,19})", summ.name)
-        if not sid_m:
+        sid = parse_object_id_from_summary(summ)
+        if not sid:
             continue
-        sid = sid_m.group(1)
         priors = load_mass_priors_from_summary(summ)
         if not priors:
             continue
@@ -1124,11 +1169,24 @@ def resolve_m2_astrometric_msun(
     return None
 
 
+def inclination_deg_for_website_table(
+    report: dict,
+    *,
+    summary_path: Optional[Path] = None,
+    gaia_cache: Optional[Dict[str, Any]] = None,
+) -> Optional[float]:
+    """Astrometric inclination (deg) for the website table column."""
+    return resolve_inclination_deg_for_rv_mass(
+        report, summary_path=summary_path, gaia_cache=gaia_cache
+    )
+
+
 def website_table_masses_from_report(
     report: dict,
     *,
     summary_path: Optional[Path] = None,
     gaia_cache: Optional[Dict[str, Any]] = None,
+    table_m1_msun: Optional[float] = None,
 ) -> Dict[str, Optional[float]]:
     """
     Map a Keplerian fit JSON report to website ``data.csv`` mass columns.
@@ -1141,7 +1199,10 @@ def website_table_masses_from_report(
         report, summary_path=summary_path, gaia_cache=gaia_cache
     )
     m1 = resolve_m1_msun_for_rv_mass(
-        report, summary_path=summary_path, gaia_cache=gaia_cache
+        report,
+        summary_path=summary_path,
+        gaia_cache=gaia_cache,
+        table_m1_msun=table_m1_msun,
     )
 
     m2sin: Optional[float] = None
@@ -1216,11 +1277,26 @@ def fit_all_variants(
         nss_p = gaia_nss.get("period_days")
         nss_e = gaia_nss.get("eccentricity")
 
-    specs: List[Tuple[str, Optional[float], Optional[float]]] = [
-        ("free", None, None),
-    ]
+    try:
+        free_params, free_rep = fit_keplerian(
+            t,
+            y,
+            yerr,
+            period_min=period_min,
+            period_max=period_max,
+            period_prior=None,
+            period_prior_sigma=period_prior_sigma,
+        )
+    except (ValueError, RuntimeError):
+        return out
+    free_rep["fit_variant"] = "free"
+    fm = mass_function_msun(free_rep["P_days"], free_rep["K_kms"], free_rep["e"])
+    free_rep["mass_function_msun"] = None if not np.isfinite(fm) else float(fm)
+    out["free"] = (free_params, free_rep)
+
+    constrained: List[Tuple[str, Optional[float], Optional[float]]] = []
     if nss_p is not None and nss_e is not None and nss_p > 0 and 0 <= nss_e < 1:
-        specs.extend(
+        constrained.extend(
             [
                 ("fix_period", float(nss_p), None),
                 ("fix_ecc", None, float(nss_e)),
@@ -1228,7 +1304,7 @@ def fit_all_variants(
             ]
         )
 
-    for key, fix_p, fix_e in specs:
+    for key, fix_p, fix_e in constrained:
         try:
             params, rep = fit_keplerian(
                 t,
@@ -1240,9 +1316,43 @@ def fit_all_variants(
                 period_prior_sigma=period_prior_sigma,
                 fix_period=fix_p,
                 fix_e=fix_e,
+                initial_params=free_params,
             )
         except (ValueError, RuntimeError):
             continue
+        if key == "fix_period":
+            chi_free = free_rep.get("chi2_red")
+            chi_fp = rep.get("chi2_red")
+            e_free = free_rep.get("e")
+            e_fp = rep.get("e")
+            if (
+                isinstance(chi_free, (int, float))
+                and isinstance(chi_fp, (int, float))
+                and chi_free > 0
+                and chi_fp > 2.0 * chi_free
+                and isinstance(e_free, (int, float))
+                and isinstance(e_fp, (int, float))
+                and abs(float(e_fp) - float(e_free)) > 0.15
+            ):
+                try:
+                    params_retry, rep_retry = fit_keplerian(
+                        t,
+                        y,
+                        yerr,
+                        period_min=period_min,
+                        period_max=period_max,
+                        period_prior=None,
+                        period_prior_sigma=period_prior_sigma,
+                        fix_period=fix_p,
+                        fix_e=float(e_free),
+                        initial_params=free_params,
+                    )
+                    chi_retry = rep_retry.get("chi2_red")
+                    if isinstance(chi_retry, (int, float)) and chi_retry < chi_fp:
+                        params, rep = params_retry, rep_retry
+                        rep["fix_period_e_seed_retry"] = True
+                except (ValueError, RuntimeError):
+                    pass
         rep["fit_variant"] = key
         fm = mass_function_msun(rep["P_days"], rep["K_kms"], rep["e"])
         rep["mass_function_msun"] = None if not np.isfinite(fm) else float(fm)
@@ -1542,6 +1652,17 @@ def discover_summary_files(output_dir: Path) -> List[Path]:
     return sorted(by_sid.values())
 
 
+def discover_summary_path(output_dir: Path, gaia_source_id: str) -> Optional[Path]:
+    """Best summary path for one Gaia source (flat or nested under output/)."""
+    sid = str(gaia_source_id).strip()
+    if not sid:
+        return None
+    for p in discover_summary_files(output_dir):
+        if parse_object_id_from_summary(p) == sid:
+            return p
+    return None
+
+
 def newest_summary(output_dir: Path) -> Optional[Path]:
     files = discover_summary_files(output_dir)
     if not files:
@@ -1566,6 +1687,33 @@ def report_stem(summary_path: Path, gaia_source_id: Optional[str]) -> str:
     return m.group(1) if m else stem
 
 
+def load_table_m1_map_from_csv(data_csv: Path) -> Dict[str, float]:
+    """Gaia source id → luminous M1 (Msun) from website tables/data.csv."""
+    if not data_csv.is_file():
+        return {}
+    import csv
+
+    from darkhunter_rv.website_table_csv import gaia_id_from_row, parse_table_m1_msun
+
+    out: Dict[str, float] = {}
+    with data_csv.open(newline="", encoding="utf-8") as fh:
+        rows = list(csv.reader(fh))
+    if len(rows) < 2:
+        return out
+    hdr = rows[0]
+    if "GAIA NAME" not in hdr:
+        return out
+    gaia_i = hdr.index("GAIA NAME")
+    for r in rows[1:]:
+        sid = gaia_id_from_row(r[gaia_i] if gaia_i < len(r) else "")
+        if not sid:
+            continue
+        m1 = parse_table_m1_msun(r, hdr)
+        if m1 is not None:
+            out[sid] = m1
+    return out
+
+
 def run_one(
     summary_path: Path,
     out_dir: Path,
@@ -1583,6 +1731,7 @@ def run_one(
     observability_cache_path: Optional[Path],
     query_gaia_online: bool,
     plots_root: Optional[Path] = None,
+    table_m1_msun: Optional[float] = None,
 ) -> Optional[dict]:
     from darkhunter_rv.rv_keplerian_plots import (
         our_telescope_points,
@@ -1634,7 +1783,9 @@ def run_one(
             if gaia_nss is not None:
                 nss_source = "online"
 
-    fit_m1_msun = m1_msun
+    fit_m1_msun = _finite_mass_value(table_m1_msun)
+    if fit_m1_msun is None:
+        fit_m1_msun = m1_msun
     fit_m2_msun = None
     fit_inclination_deg = None
     if gaia_nss is not None:
@@ -1689,21 +1840,27 @@ def run_one(
     resid_png = out_dir / f"{stem}_keplerian_residuals.png"
     out_json = out_dir / f"{stem}_keplerian_fit.json"
 
-    report["used_m1_msun"] = None if fit_m1_msun is None else float(fit_m1_msun)
+    report["used_m1_msun"] = resolve_m1_msun_for_rv_mass(
+        report,
+        summary_path=summary_path,
+        table_m1_msun=table_m1_msun,
+    )
+    report["table_m1_msun"] = None if table_m1_msun is None else float(table_m1_msun)
     report["used_m2_msun"] = None if fit_m2_msun is None else float(fit_m2_msun)
     report["inclination_deg_used"] = (
         None if fit_inclination_deg is None else float(fit_inclination_deg)
     )
 
     _, rep_free = fit_variants["free"]
-    m2sini, m2_at_i = rv_only_mass_estimates(rep_free, fit_m1_msun, fit_inclination_deg)
+    m1_for_masses = report["used_m1_msun"]
+    m2sini, m2_at_i = rv_only_mass_estimates(rep_free, m1_for_masses, fit_inclination_deg)
     report["m2sini_msun"] = m2sini
     report["m2_given_inclination_msun"] = m2_at_i
     report["m2_astrometric_msun"] = report["used_m2_msun"]
 
-    plot_multi_fit(summary_path, points_fit, fit_variants, report, out_png, m1_msun=fit_m1_msun)
+    plot_multi_fit(summary_path, points_fit, fit_variants, report, out_png, m1_msun=m1_for_masses)
     plot_fit_residuals(
-        summary_path, points_fit, fit_variants, report, resid_png, m1_msun=fit_m1_msun
+        summary_path, points_fit, fit_variants, report, resid_png, m1_msun=m1_for_masses
     )
     ours = our_telescope_points(points_fit)
     if len(ours) >= 2:
@@ -1778,6 +1935,11 @@ def main() -> None:
         default=None,
         help="Optional observability cache JSON path. Default: <reports-dir>/observability_windows_cache.json",
     )
+    parser.add_argument(
+        "--data-csv",
+        default=None,
+        help="Website tables/data.csv for luminous M1 (Msun) per Gaia id (default: none).",
+    )
     parser.add_argument("--force", action="store_true", help="Recompute even if report JSON is newer than summary.")
     args = parser.parse_args()
 
@@ -1796,6 +1958,12 @@ def main() -> None:
     if not targets:
         print("No summary files found.")
         return
+
+    table_m1_map: Dict[str, float] = {}
+    if args.data_csv:
+        table_m1_map = load_table_m1_map_from_csv(Path(args.data_csv))
+        if table_m1_map:
+            print(f"Loaded luminous M1 for {len(table_m1_map)} stars from {args.data_csv}")
 
     if args.use_gaia_nss and args.query_gaia_online:
         ids: List[str] = []
@@ -1841,8 +2009,9 @@ def main() -> None:
             args.use_gaia_nss,
             gaia_cache_path,
             observability_cache_path,
-            args.            query_gaia_online,
+            args.query_gaia_online,
             plots_root=output_dir,
+            table_m1_msun=table_m1_map.get(str(sid)) if sid else None,
         )
         if report is None:
             skipped += 1

@@ -12,14 +12,17 @@ from astropy.time import Time
 MEDIA_COLUMNS = frozenset({"RV PLOT", "RV FIT", "FLUX PLOT", "SOURCE IMAGE"})
 
 MASS_COLUMNS = ("M2sin i (Msun)", "(M2sin i)/(sin i) (Msun)")
+INCLINATION_COLUMN = "INCLINATION (deg)"
+MASS_BLOCK_COLUMNS = MASS_COLUMNS + (INCLINATION_COLUMN,)
 
 GAIA_DATA_COLUMN = "GAIA DATA"
 SCHEDULE_COLUMNS = ("DAYS SINCE LAST APF", "NEXT RV EVENT (DATE)")
-LEGACY_COLUMN_RENAMES = {"NEXT RV EVENT (MJD)": "NEXT RV EVENT (DATE)"}
+LEGACY_NEXT_RV_MJD = "NEXT RV EVENT (MJD)"
+LEGACY_COLUMN_RENAMES = {LEGACY_NEXT_RV_MJD: "NEXT RV EVENT (DATE)"}
 
 # Inserted immediately after these anchors when rebuilding header order.
 _INSERT_AFTER: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("M2 (Msun)", MASS_COLUMNS),
+    ("M2 (Msun)", MASS_BLOCK_COLUMNS),
     ("DATA PRODUCTS", (GAIA_DATA_COLUMN,)),
     (GAIA_DATA_COLUMN, SCHEDULE_COLUMNS),
 )
@@ -43,7 +46,12 @@ def row_dict(hdr: List[str], row: List[str]) -> Dict[str, str]:
         if not key:
             continue
         key = LEGACY_COLUMN_RENAMES.get(key, key)
-        out[key] = row[i] if i < len(row) else ""
+        val = row[i] if i < len(row) else ""
+        if key in out:
+            if not (out[key] or "").strip() and (val or "").strip():
+                out[key] = val
+        else:
+            out[key] = val
     return out
 
 
@@ -106,11 +114,13 @@ def build_canonical_header(hdr: List[str]) -> List[str]:
     inserted_mass = False
     inserted_sched = False
     for h in base:
-        if h in MASS_COLUMNS or h in SCHEDULE_COLUMNS or h == GAIA_DATA_COLUMN:
+        if h in MASS_BLOCK_COLUMNS or h in SCHEDULE_COLUMNS or h == GAIA_DATA_COLUMN:
+            continue
+        if h == LEGACY_NEXT_RV_MJD:
             continue
         out.append(h)
         if h == "M2 (Msun)" and not inserted_mass:
-            for c in MASS_COLUMNS:
+            for c in MASS_BLOCK_COLUMNS:
                 if c in base:
                     out.append(c)
             inserted_mass = True
@@ -124,7 +134,7 @@ def build_canonical_header(hdr: List[str]) -> List[str]:
                 inserted_sched = True
 
     if not inserted_mass:
-        for c in MASS_COLUMNS:
+        for c in MASS_BLOCK_COLUMNS:
             if c in base and c not in out:
                 out.append(c)
     if not inserted_sched:
@@ -133,7 +143,7 @@ def build_canonical_header(hdr: List[str]) -> List[str]:
                 out.append(c)
 
     for h in base:
-        if h not in out:
+        if h not in out and h != LEGACY_NEXT_RV_MJD:
             out.append(h)
     return out
 
@@ -143,8 +153,19 @@ def normalize_data_csv(hdr: List[str], data_rows: List[List[str]]) -> Tuple[List
     Rebuild rows keyed by column name (fixes off-by-one from header-only edits).
     Clears media / stray <img> cells. Returns (new_hdr, n_stray_cleared).
     """
-    _ensure_columns_present(hdr, MASS_COLUMNS + (GAIA_DATA_COLUMN,) + SCHEDULE_COLUMNS)
+    _ensure_columns_present(hdr, MASS_BLOCK_COLUMNS + (GAIA_DATA_COLUMN,) + SCHEDULE_COLUMNS)
     align_rows_to_header(hdr, data_rows)
+
+    if LEGACY_NEXT_RV_MJD in hdr and "NEXT RV EVENT (DATE)" in hdr:
+        date_i = hdr.index("NEXT RV EVENT (DATE)")
+        mjd_i = hdr.index(LEGACY_NEXT_RV_MJD)
+        for r in data_rows:
+            while len(r) <= max(date_i, mjd_i):
+                r.append("")
+            if not (r[date_i] or "").strip() and (r[mjd_i] or "").strip():
+                mjd = parse_next_rv_cell_to_mjd(r[mjd_i])
+                if mjd is not None:
+                    r[date_i] = format_next_rv_event_cell(mjd)
 
     old_hdr = list(hdr)
     maps = [row_dict(old_hdr, r) for r in data_rows]
@@ -255,3 +276,21 @@ def parse_next_rv_cell_to_mjd(value: str) -> Optional[float]:
 def gaia_id_from_row(gaia_cell: str) -> str:
     m = re.search(r"(\d{8,})", gaia_cell or "")
     return m.group(1) if m else ""
+
+
+def parse_table_m1_msun(row: List[str], hdr: List[str]) -> Optional[float]:
+    """Luminous M1 from the website table column (Msun)."""
+    col = "M1 (Msun)"
+    if col not in hdr:
+        return None
+    idx = hdr.index(col)
+    if idx >= len(row):
+        return None
+    raw = (row[idx] or "").strip()
+    if not raw or raw.upper() == "N/A":
+        return None
+    try:
+        val = float(raw)
+    except ValueError:
+        return None
+    return float(val) if np.isfinite(val) and val > 0 else None

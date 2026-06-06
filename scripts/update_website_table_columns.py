@@ -11,17 +11,21 @@ from pathlib import Path
 
 from fit_apf_rv_keplerian import (
     _load_json_cache,
+    discover_summary_path,
     enrich_gaia_cache_from_summaries,
+    inclination_deg_for_website_table,
     lookup_fit_report_by_gaia_id,
     website_table_masses_from_report,
 )
 from darkhunter_rv.website_table_csv import (
+    INCLINATION_COLUMN,
     days_since_last_apf_from_summary,
     format_next_rv_event_cell,
     gaia_id_from_row,
     next_rv_event_from_fit_report,
     normalize_data_csv,
     parse_next_rv_cell_to_mjd,
+    parse_table_m1_msun,
 )
 
 
@@ -57,6 +61,7 @@ def update_table_columns(
     m2_i = hdr.index("M2 (Msun)")
     m2sini_i = hdr.index("M2sin i (Msun)")
     m2over_i = hdr.index("(M2sin i)/(sin i) (Msun)")
+    incl_i = hdr.index(INCLINATION_COLUMN)
     apf_days_i = hdr.index("DAYS SINCE LAST APF")
     next_rv_i = hdr.index("NEXT RV EVENT (DATE)")
 
@@ -85,6 +90,7 @@ def update_table_columns(
     n_m2sini = 0
     n_m2_at_i = 0
     n_m2_at_i_eq_sin = 0
+    n_incl = 0
     n_next = 0
     target = (gaia_id or "").strip()
     for r in data_rows:
@@ -97,8 +103,9 @@ def update_table_columns(
         if target and sid != target:
             continue
 
-        summ = out_dir / f"Gaia_DR3_{sid}_summary.txt"
-        if summ.is_file():
+        table_m1 = parse_table_m1_msun(r, hdr)
+        summ = discover_summary_path(out_dir, sid)
+        if summ is not None and summ.is_file():
             age = days_since_last_apf_from_summary(summ)
             if age is not None:
                 while len(r) <= apf_days_i:
@@ -109,10 +116,24 @@ def update_table_columns(
         rep = lookup_fit_report_by_gaia_id(reports, sid)
         if rep is None:
             continue
+        incl_deg = inclination_deg_for_website_table(
+            rep,
+            summary_path=summ if summ is not None else None,
+            gaia_cache=gaia_cache,
+        )
+        while len(r) <= incl_i:
+            r.append("")
+        if incl_deg is not None:
+            r[incl_i] = f"{incl_deg:.2f}"
+            n_incl += 1
+        else:
+            r[incl_i] = ""
+
         masses = website_table_masses_from_report(
             rep,
-            summary_path=summ if summ.is_file() else None,
+            summary_path=summ if summ is not None else None,
             gaia_cache=gaia_cache,
+            table_m1_msun=table_m1,
         )
         if masses["m2_msun"] is not None:
             while len(r) <= m2_i:
@@ -164,6 +185,7 @@ def update_table_columns(
         "m2sin_i_filled": n_m2sini,
         "m2_at_i_filled": n_m2_at_i,
         "m2_at_i_equals_m2sin_i": n_m2_at_i_eq_sin,
+        "inclination_filled": n_incl,
         "next_rv_filled": n_next,
         "reports_loaded": len(reports),
         "cache_enriched_from_summaries": n_cache_summ,
@@ -216,6 +238,7 @@ def main() -> int:
         f"updated {args.data_csv}: {stats['data_rows']} rows, {stats['columns']} columns, "
         f"cleared {stats['stray_img_cleared']} stray <img>, "
         f"apf_days={stats['apf_days_filled']}, m2={stats['m2_filled']}, "
+        f"incl={stats['inclination_filled']}, "
         f"m2sin_i={stats['m2sin_i_filled']}, m2_at_i={stats['m2_at_i_filled']} "
         f"(m2_at_i=m2sin_i for {stats['m2_at_i_equals_m2sin_i']}, often i≈90°), "
         f"next_rv={stats['next_rv_filled']} (from {stats['reports_loaded']} reports, "

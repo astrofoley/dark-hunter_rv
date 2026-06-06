@@ -100,16 +100,36 @@ def _xlim_from_data(t: np.ndarray, report: dict) -> Tuple[float, float]:
     return t_lo, t_hi
 
 
+def _observability_windows(report: dict) -> List[dict]:
+    obs_win = report.get("observability_window")
+    if not isinstance(obs_win, dict):
+        return []
+    windows = obs_win.get("windows")
+    if isinstance(windows, list) and windows:
+        return [w for w in windows if isinstance(w, dict) and w.get("start_date") and w.get("end_date")]
+    if obs_win.get("start_date") and obs_win.get("end_date"):
+        return [obs_win]
+    return []
+
+
 def _observability_span(report: dict) -> Tuple[Optional[float], Optional[float], Optional[dict]]:
     obs_win = report.get("observability_window")
     if not isinstance(obs_win, dict):
         return None, None, None
-    try:
-        obs_start = float(Time(obs_win["start_date"], format="iso", scale="utc").mjd)
-        obs_end = float(Time(obs_win["end_date"], format="iso", scale="utc").mjd) + 1.0
-        return obs_start, obs_end, obs_win
-    except Exception:
+    windows = _observability_windows(report)
+    if not windows:
         return None, None, None
+    starts: List[float] = []
+    ends: List[float] = []
+    for w in windows:
+        try:
+            starts.append(float(Time(w["start_date"], format="iso", scale="utc").mjd))
+            ends.append(float(Time(w["end_date"], format="iso", scale="utc").mjd) + 1.0)
+        except Exception:
+            continue
+    if not starts or not ends:
+        return None, None, None
+    return float(min(starts)), float(max(ends)), obs_win
 
 
 def _shade_apf_window(
@@ -120,19 +140,34 @@ def _shade_apf_window(
     *,
     annotate: bool = True,
 ) -> None:
-    obs_start, obs_end, obs_win = _observability_span(report)
-    if obs_start is None or obs_end is None or obs_win is None:
+    obs_win = report.get("observability_window")
+    if not isinstance(obs_win, dict):
         return
-    left = max(t_start, obs_start)
-    right = min(t_end, obs_end)
-    if right <= left:
+    windows = _observability_windows(report)
+    if not windows:
         return
-    ax.axvspan(left, right, color="tab:blue", alpha=0.12, zorder=0)
-    if annotate:
+    label_parts: List[str] = []
+    for w in windows:
+        try:
+            obs_start = float(Time(w["start_date"], format="iso", scale="utc").mjd)
+            obs_end = float(Time(w["end_date"], format="iso", scale="utc").mjd) + 1.0
+        except Exception:
+            continue
+        left = max(t_start, obs_start)
+        right = min(t_end, obs_end)
+        if right <= left:
+            continue
+        ax.axvspan(left, right, color="tab:blue", alpha=0.12, zorder=0)
+        label_parts.append(f"{w['start_date']} to {w['end_date']}")
+    if annotate and label_parts:
+        if obs_win.get("circumpolar"):
+            msg = "Circumpolar (airmass ≤ 2.5): " + "; ".join(label_parts[:2])
+        else:
+            msg = "APF window " + "; ".join(label_parts[:3])
         ax.text(
             0.985,
             0.02,
-            f"APF window {obs_win['start_date']} to {obs_win['end_date']}",
+            msg,
             transform=ax.transAxes,
             fontsize=8.5,
             color="tab:blue",

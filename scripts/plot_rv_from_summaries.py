@@ -58,15 +58,22 @@ def parse_points(summary_path: Path) -> list[RVPoint]:
     return points
 
 
-def minimal_report(points: list[RVPoint]) -> dict:
+def minimal_report(points: list[RVPoint], *, summary_path: Path | None = None) -> dict:
     t = np.array([p.mjd for p in points], dtype=float)
     t_ref = float(np.median(t)) if t.size else float(Time.now().mjd)
+    obs = None
+    if summary_path is not None:
+        from darkhunter_rv.apf_observability import observability_for_summary
+
+        obs_row = observability_for_summary(summary_path)
+        if obs_row is not None:
+            obs = {k: v for k, v in obs_row.items() if k != "gaia_source_id"}
     return {
         "t_ref_mjd": t_ref,
         "now_mjd": float(Time.now().mjd),
         "next_rv_max_mjd": t_ref,
         "next_rv_min_mjd": t_ref,
-        "observability_window": None,
+        "observability_window": obs,
     }
 
 
@@ -74,7 +81,7 @@ def build_plot(summary_path: Path, out_png: Path) -> bool:
     points = our_telescope_points(parse_points(summary_path))
     if len(points) < 2:
         return False
-    plot_rv_data_only(summary_path, points, minimal_report(points), out_png)
+    plot_rv_data_only(summary_path, points, minimal_report(points, summary_path=summary_path), out_png)
     return True
 
 

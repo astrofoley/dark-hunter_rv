@@ -108,6 +108,18 @@ for summ in "${SUMMARY_FILES[@]}"; do
 done
 echo "summaries=${#SUMMARY_FILES[@]} with_epochs>=${MIN_POINTS}: $n_ge_min"
 
+echo "=== APF observability windows cache ==="
+obs_args=(
+  scripts/build_apf_observability_cache.py
+  --data-csv "$DATA_CSV"
+  --output-dir "$OUT"
+  --cache "$REPORTS_DIR/observability_windows_cache.json"
+)
+if [[ -n "$STAR_ID" ]]; then
+  obs_args+=(--gaia-id "$STAR_ID")
+fi
+run_cmd "$PY" "${obs_args[@]}"
+
 if [[ "$RUN_FITS" == "1" ]]; then
   echo "=== Keplerian fits ==="
   fit_args=(
@@ -117,6 +129,7 @@ if [[ "$RUN_FITS" == "1" ]]; then
     --use-gaia-nss
     --min-points "$MIN_POINTS"
     --reports-dir "$REPORTS_DIR"
+    --data-csv "$DATA_CSV"
   )
   if [[ "$FIT_FORCE" == "1" ]]; then
     fit_args+=(--force)
@@ -125,7 +138,7 @@ if [[ "$RUN_FITS" == "1" ]]; then
     fit_args+=(--query-gaia-online)
   fi
   if [[ -n "$STAR_ID" ]]; then
-    fit_args=(fit_apf_rv_keplerian.py --summary "$OUT/Gaia_DR3_${STAR_ID}_summary.txt" --output-dir "$OUT" --use-gaia-nss --min-points "$MIN_POINTS" --reports-dir "$REPORTS_DIR")
+    fit_args=(fit_apf_rv_keplerian.py --summary "$OUT/Gaia_DR3_${STAR_ID}_summary.txt" --output-dir "$OUT" --use-gaia-nss --min-points "$MIN_POINTS" --reports-dir "$REPORTS_DIR" --data-csv "$DATA_CSV")
     if [[ "$FIT_FORCE" == "1" ]]; then
       fit_args+=(--force)
     fi
@@ -210,121 +223,25 @@ done
 if [[ "$DRY_RUN" != "1" ]]; then
   export REPORTS_DIR DATA_CSV MISSING_ASSETS_CSV STAGED_SUMMARY OUT
   "$PY" - <<'PY'
-import csv
 import json
 import os
 from pathlib import Path
 
-from fit_apf_rv_keplerian import (
-    _load_json_cache,
-    lookup_fit_report_by_gaia_id,
-    website_table_masses_from_report,
-)
-from darkhunter_rv.website_table_csv import (
-    days_since_last_apf_from_summary,
-    format_next_rv_event_cell,
-    gaia_id_from_row,
-    next_rv_event_from_fit_report,
-    normalize_data_csv,
-    parse_next_rv_cell_to_mjd,
-)
+from scripts.update_website_table_columns import load_gaia_nss_cache, update_table_columns
 
 report_dir = Path(os.environ["REPORTS_DIR"])
 out_dir = Path(os.environ.get("OUT", report_dir.parent / "output"))
-gaia_cache_path = report_dir / "gaia_nss_cache.json"
-gaia_cache = _load_json_cache(gaia_cache_path) if gaia_cache_path.is_file() else {}
 data_csv = Path(os.environ["DATA_CSV"])
 missing_csv = Path(os.environ["MISSING_ASSETS_CSV"])
 summary_json = Path(os.environ["STAGED_SUMMARY"])
 
-reports = {}
-for p in sorted(report_dir.glob("*_keplerian_fit.json")):
-    sid = p.stem.replace("_keplerian_fit", "")
-    try:
-        reports[sid] = json.loads(p.read_text())
-    except Exception:
-        continue
-
-rows = []
-with data_csv.open(newline="", encoding="utf-8") as fh:
-    reader = csv.reader(fh)
-    rows = list(reader)
-
-if not rows:
-    raise SystemExit("tables/data.csv is empty")
-
-hdr = rows[0]
-try:
-    gaia_i = hdr.index("GAIA NAME")
-    m2_i = hdr.index("M2 (Msun)")
-except ValueError as exc:
-    raise SystemExit(f"Required data.csv column missing: {exc}")
-
-data_rows = rows[1:]
-normalize_data_csv(hdr, data_rows)
-
-col_m2sini = "M2sin i (Msun)"
-col_m2over = "(M2sin i)/(sin i) (Msun)"
-col_apf_days = "DAYS SINCE LAST APF"
-col_next_rv = "NEXT RV EVENT (DATE)"
-m2sini_i = hdr.index(col_m2sini)
-m2over_i = hdr.index(col_m2over)
-apf_days_i = hdr.index(col_apf_days)
-next_rv_i = hdr.index(col_next_rv)
-
-updated = 0
-for r in data_rows:
-    if not r:
-        continue
-    gaia = (r[gaia_i] if gaia_i < len(r) else "").strip()
-    sid = gaia_id_from_row(gaia)
-    if not sid:
-        continue
-
-    summ = out_dir / f"Gaia_DR3_{sid}_summary.txt"
-    if summ.is_file():
-        age = days_since_last_apf_from_summary(summ)
-        if age is not None:
-            while len(r) <= apf_days_i:
-                r.append("")
-            r[apf_days_i] = f"{age:.2f}"
-
-    rep = lookup_fit_report_by_gaia_id(reports, sid)
-    if rep is not None:
-        masses = website_table_masses_from_report(
-            rep,
-            summary_path=summ if summ.is_file() else None,
-            gaia_cache=gaia_cache,
-        )
-        m2_astro = masses["m2_msun"]
-        m2s = masses["m2sin_i_msun"]
-        m2i = masses["m2_at_i_msun"]
-        if m2_astro is not None:
-            while len(r) <= m2_i:
-                r.append("")
-            r[m2_i] = f"{m2_astro:.5f}"
-            updated += 1
-        while len(r) <= m2sini_i:
-            r.append("")
-        if m2s is not None:
-            r[m2sini_i] = f"{m2s:.5f}"
-        else:
-            r[m2sini_i] = ""
-        while len(r) <= m2over_i:
-            r.append("")
-        if m2i is not None:
-            r[m2over_i] = f"{m2i:.5f}"
-        else:
-            r[m2over_i] = ""
-        nxt = next_rv_event_from_fit_report(rep)
-        if nxt is not None:
-            while len(r) <= next_rv_i:
-                r.append("")
-            r[next_rv_i] = format_next_rv_event_cell(nxt)
-
-with data_csv.open("w", newline="", encoding="utf-8") as fh:
-    writer = csv.writer(fh)
-    writer.writerows(rows)
+gaia_cache = load_gaia_nss_cache(report_dir)
+stats = update_table_columns(
+    data_csv,
+    out_dir=out_dir,
+    reports_dir=report_dir,
+    gaia_cache=gaia_cache,
+)
 
 missing = 0
 if missing_csv.exists():
@@ -332,12 +249,17 @@ if missing_csv.exists():
         missing = max(0, sum(1 for _ in fh) - 1)
 
 summary = {
-    "reports_found": len(reports),
-    "table_rows_updated_m2": updated,
+    "reports_found": stats["reports_loaded"],
+    "table_rows_updated_m2": stats["m2_filled"],
+    "inclination_filled": stats["inclination_filled"],
+    "m2_at_i_filled": stats["m2_at_i_filled"],
     "missing_assets_records": missing,
 }
 summary_json.write_text(json.dumps(summary, indent=2))
-print(f"table_update: m2_rows_updated={updated}, reports_found={len(reports)}, missing_assets={missing}")
+print(
+    f"table_update: m2_rows={stats['m2_filled']}, incl={stats['inclination_filled']}, "
+    f"m2_at_i={stats['m2_at_i_filled']}, reports={stats['reports_loaded']}, missing_assets={missing}"
+)
 PY
 fi
 

@@ -50,6 +50,7 @@ const headerDisplayMap = {
     "M2 (Msun)": "Dark M2<br>(M<sub>⊙</sub>)",
     "M2sin i (Msun)": "M2 sin i<br>(M<sub>⊙</sub>)",
     "(M2sin i)/(sin i) (Msun)": "M2 at i<br>(M<sub>⊙</sub>)",
+    "INCLINATION (deg)": "Inclination<br>(deg)",
     "RV PLOT": "RV Curve",
     "RV FIT": "RV Fit",
     "FLUX PLOT": "H-beta",
@@ -419,7 +420,7 @@ function colIndex(headerName) {
     return Object.prototype.hasOwnProperty.call(colByHeader, headerName) ? colByHeader[headerName] : -1;
 }
 
-const NUMERIC_TABLE_HEADERS = new Set(["DAYS SINCE LAST APF"]);
+const NUMERIC_TABLE_HEADERS = new Set(["DAYS SINCE LAST APF", "INCLINATION (deg)"]);
 const DATE_TABLE_HEADERS = new Set(["NEXT RV EVENT (DATE)", "NEXT RV EVENT (MJD)"]);
 
 function cellAtColumn(row, headerName) {
