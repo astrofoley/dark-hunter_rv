@@ -11,7 +11,8 @@ from astropy import units as u
 from astropy.coordinates import AltAz, EarthLocation, SkyCoord
 from astropy.time import Time
 
-from fit_apf_rv_keplerian import _parse_gaia_metadata, parse_object_id_from_summary
+from darkhunter_rv.gaia_utils import parse_gaia_metadata_from_star_summary
+from darkhunter_rv.summary_paths import parse_object_id_from_summary
 
 # APF at Lick Observatory (approximate IERS values).
 LICK_LOCATION = EarthLocation(lat=37.3413 * u.deg, lon=-121.6438 * u.deg, height=1280 * u.m)
@@ -31,7 +32,7 @@ def _airmass_from_altitude_deg(alt_deg: float) -> float:
 
 
 def _target_coord_from_summary(summary_path: Path) -> Optional[SkyCoord]:
-    meta = _parse_gaia_metadata(summary_path)
+    meta = parse_gaia_metadata_from_star_summary(summary_path)
     if not meta:
         return None
     ra = meta.get("RA") or meta.get("ra")
