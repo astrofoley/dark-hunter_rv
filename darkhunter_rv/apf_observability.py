@@ -143,29 +143,36 @@ def compute_apf_observability(
 
     step_days = STEP_MINUTES / (24.0 * 60.0)
     min_steps = max(1, int(round(MIN_OBS_MINUTES / STEP_MINUTES)))
+    n_steps = int(np.floor((end_mjd - now_mjd) / step_days)) + 1
+    mjds = now_mjd + step_days * np.arange(n_steps, dtype=float)
+    times = Time(mjds, format="mjd", scale="utc")
+
+    sun_alts = np.array([_sun_alt_deg(t, LICK_LOCATION) for t in times])
+    in_night = sun_alts <= TWILIGHT_SUN_ALT_DEG
+
+    target_alts = np.full(n_steps, np.nan, dtype=float)
+    if np.any(in_night):
+        night_times = times[in_night]
+        target_aa = coord.transform_to(AltAz(obstime=night_times, location=LICK_LOCATION))
+        target_alts[in_night] = target_aa.alt.deg
+
+    airmasses = np.array([_airmass_from_altitude_deg(float(a)) for a in target_alts])
+    observable = in_night & np.isfinite(airmasses) & (airmasses <= MAX_AIRMASS)
+
     windows: List[ObsWindow] = []
-    t = now_mjd
     run_start: Optional[float] = None
     run_end: Optional[float] = None
     streak = 0
     night_active = False
 
-    while t <= end_mjd + step_days:
-        time = Time(t, format="mjd", scale="utc")
-        sun_alt = _sun_alt_deg(time, LICK_LOCATION)
-        in_night = sun_alt <= TWILIGHT_SUN_ALT_DEG
-
-        observable = False
-        if in_night:
-            target_aa = coord.transform_to(AltAz(obstime=time, location=LICK_LOCATION))
-            am = _airmass_from_altitude_deg(float(target_aa.alt.deg))
-            observable = np.isfinite(am) and am <= MAX_AIRMASS
-
-        if in_night and observable:
+    for idx, t in enumerate(mjds):
+        obs = bool(observable[idx])
+        night = bool(in_night[idx])
+        if night and obs:
             if run_start is None:
-                run_start = t
+                run_start = float(t)
             streak += 1
-            run_end = t
+            run_end = float(t)
             night_active = True
         else:
             if night_active and run_start is not None and run_end is not None and streak >= min_steps:
@@ -181,7 +188,6 @@ def compute_apf_observability(
             run_end = None
             streak = 0
             night_active = False
-        t += step_days
 
     merged = _merge_windows(windows)
     if not merged:

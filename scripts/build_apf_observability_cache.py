@@ -38,6 +38,12 @@ def main() -> int:
         help="Output JSON path (default: REPO/rv_fit_reports/observability_windows_cache.json)",
     )
     ap.add_argument("--gaia-id", default=None, help="Single Gaia DR3 source id (default: all table rows).")
+    ap.add_argument(
+        "--progress-every",
+        type=int,
+        default=10,
+        help="Print progress every N table rows (0 = only final summary).",
+    )
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parents[1]
@@ -71,18 +77,27 @@ def main() -> int:
 
     built = 0
     skipped = 0
-    for sid in gaia_ids:
+    total = len(gaia_ids)
+    if total:
+        print(f"Building APF observability for {total} table stars...", flush=True)
+    for i, sid in enumerate(gaia_ids, start=1):
         summ = discover_summary_path(out_dir, sid)
         if summ is None:
             skipped += 1
+            if args.progress_every and (i == 1 or i % args.progress_every == 0 or i == total):
+                print(f"  [{i}/{total}] {sid}: skipped (no summary)", flush=True)
             continue
         row = observability_for_summary(summ)
         if row is None:
             skipped += 1
+            if args.progress_every and (i == 1 or i % args.progress_every == 0 or i == total):
+                print(f"  [{i}/{total}] {sid}: skipped (no windows)", flush=True)
             continue
         entry = {k: v for k, v in row.items() if k != "gaia_source_id"}
         cache[sid] = entry
         built += 1
+        if args.progress_every and (i == 1 or i % args.progress_every == 0 or i == total):
+            print(f"  [{i}/{total}] {sid}: ok", flush=True)
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(json.dumps(cache, indent=2, sort_keys=True))
