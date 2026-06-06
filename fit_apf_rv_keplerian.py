@@ -33,6 +33,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from astropy.timeseries import LombScargle
 from astropy.time import Time
+
+from darkhunter_rv.thiele_innes_inclination import fill_inclination_in_metadata, inclination_from_row_dict
 from scipy.optimize import least_squares
 import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
@@ -131,6 +133,7 @@ def load_mass_priors_from_summary(path: Path) -> Dict[str, float]:
     meta = _parse_gaia_metadata(path)
     if not meta:
         return {}
+    fill_inclination_in_metadata(meta)
     out: Dict[str, float] = {}
     m1 = _meta_float(meta, "M1", "m1", "m1_msun", "Mass_Primary", "mass_primary")
     m2 = _meta_float(meta, "M2", "m2", "m2_msun", "Mass_Secondary", "mass_secondary")
@@ -279,6 +282,27 @@ def _extract_m1_from_nss_row(row: Any) -> Optional[float]:
     return None
 
 
+def _gaia_table_row_as_dict(row: Any) -> Dict[str, Any]:
+    try:
+        names = list(getattr(row, "colnames", []) or [])
+        return {str(n): row[n] for n in names}
+    except Exception:
+        pass
+    if isinstance(row, dict):
+        return dict(row)
+    return {}
+
+
+def _resolve_orbit_inclination_deg(row: Any, cached_incl: Optional[float] = None) -> tuple[Optional[float], Optional[float]]:
+    """Database inclination when present; otherwise derive from Thiele-Innes (Halbwachs App. A)."""
+    incl_o = cached_incl
+    if incl_o is None:
+        incl_o = _first_finite(row, ["inclination", "incl"])
+    if incl_o is not None and np.isfinite(incl_o) and 0.05 < float(incl_o) < 179.95:
+        return float(incl_o), None
+    return inclination_from_row_dict(_gaia_table_row_as_dict(row))
+
+
 def fetch_gaia_nss_orbit(source_id: str, cache_path: Optional[Path] = None) -> Optional[Dict[str, float]]:
     cache: Dict[str, Any] = {}
     if cache_path is not None:
@@ -299,7 +323,11 @@ def fetch_gaia_nss_orbit(source_id: str, cache_path: Optional[Path] = None) -> O
 
     try:
         orbit_query = f"""
-        SELECT source_id, nss_solution_type, period, eccentricity, inclination
+        SELECT source_id, nss_solution_type, period, eccentricity, inclination,
+               a_thiele_innes, a_thiele_innes_error,
+               b_thiele_innes, b_thiele_innes_error,
+               f_thiele_innes, f_thiele_innes_error,
+               g_thiele_innes, g_thiele_innes_error
         FROM gaiadr3.nss_two_body_orbit
         WHERE source_id = '{source_id}'
         """
@@ -335,9 +363,11 @@ def fetch_gaia_nss_orbit(source_id: str, cache_path: Optional[Path] = None) -> O
             if p <= 0 or e < 0 or e >= 1:
                 continue
             out = {"period_days": float(p), "eccentricity": float(e)}
-            incl_o = _first_finite(row, ["inclination", "incl"])
+            incl_o, incl_err = _resolve_orbit_inclination_deg(row)
             if incl_o is not None and np.isfinite(incl_o):
                 out["inclination_deg"] = float(incl_o)
+            if incl_err is not None and np.isfinite(incl_err) and incl_err > 0:
+                out["inclination_deg_error"] = float(incl_err)
             if m1 is not None:
                 out["m1_msun"] = m1
             if m2 is not None:
@@ -384,7 +414,11 @@ def prefetch_gaia_nss_bulk(source_ids: List[str], cache_path: Path, chunk_size: 
     for ids in _chunk(to_fetch, chunk_size):
         id_clause = ",".join(ids)
         orbit_q = (
-            "SELECT source_id, period, eccentricity, inclination "
+            "SELECT source_id, period, eccentricity, inclination, "
+            "a_thiele_innes, a_thiele_innes_error, "
+            "b_thiele_innes, b_thiele_innes_error, "
+            "f_thiele_innes, f_thiele_innes_error, "
+            "g_thiele_innes, g_thiele_innes_error "
             "FROM gaiadr3.nss_two_body_orbit "
             f"WHERE source_id IN ({id_clause})"
         )
@@ -414,9 +448,11 @@ def prefetch_gaia_nss_bulk(source_ids: List[str], cache_path: Path, chunk_size: 
             if not np.isfinite(p) or not np.isfinite(e) or p <= 0 or e < 0 or e >= 1:
                 continue
             entry: Dict[str, float] = {"period_days": float(p), "eccentricity": float(e)}
-            incl_o = _first_finite(row, ["inclination", "incl"])
+            incl_o, incl_err = _resolve_orbit_inclination_deg(row)
             if incl_o is not None and np.isfinite(incl_o):
                 entry["inclination_deg"] = float(incl_o)
+            if incl_err is not None and np.isfinite(incl_err) and incl_err > 0:
+                entry["inclination_deg_error"] = float(incl_err)
             orbit_by[sid] = entry
 
         mass_by: Dict[str, Dict[str, float]] = {}

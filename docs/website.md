@@ -80,7 +80,7 @@ Ensure Apache serves `/var/www/html/darkhunter/rv/` (existing `Alias` or symlink
 | **M2 (Msun)** | Gaia NSS astrometric secondary mass (`used_m2_msun`), not from the RV fit |
 | **M2sin i (Msun)** | RV-only Keplerian fit f(M) with table M1 |
 | **(M2sin i)/(sin i) (Msun)** | Same f(M) and M1 with Gaia astrometric inclination |
-| **INCLINATION (deg)** | Astrometric i used for M2 at i (empty if unknown or edge-on) |
+| **INCLINATION (deg)** | Astrometric i used for M2 at i (from Gaia NSS or derived from Thiele-Innes A,B,F,G when the database field is empty; empty if unknown or edge-on) |
 
 **RV fit plots:** blue shaded regions mark APF visibility at Lick (airmass ≤ 2.5 for ≥15 min after −18° twilight, out to 3 months). Built via `scripts/build_apf_observability_cache.py` and stored in `rv_fit_reports/observability_windows_cache.json`. Circumpolar targets are annotated on the plot.
 
@@ -166,6 +166,17 @@ PYTHONPATH=. python3 scripts/build_apf_observability_cache.py \
 ```
 
 Hard-refresh the browser. After a code update that changes Keplerian fit logic or observability shading, rerun per-object refit (command 3) or full refresh (command 2).
+
+**Inclination from Thiele-Innes** (Gaia DR3 astrometric binaries often have empty `inclination` in `nss_two_body_orbit`; derive from A,B,F,G in summaries):
+
+```bash
+cd /data2/darkhunter/dark-hunter_rv
+PYTHONPATH=. python3 scripts/patch_summary_inclination_from_thiele_innes.py \
+  --output-dir /data2/darkhunter/dark-hunter_rv/output
+PREFETCH_GAIA_NSS=1 bash scripts/repair_website_table.sh
+```
+
+New Gaia queries and summary reads apply the same derivation automatically when TI elements are present.
 
 ### Step 2 — Full refresh when ready
 

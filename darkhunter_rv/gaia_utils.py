@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 from astropy.time import Time
 from . import config
+from .thiele_innes_inclination import fill_inclination_in_metadata
 
 def _gaia_class():
     """Lazy import: avoids astroquery's noisy archive banner when only reading summaries from disk."""
@@ -259,6 +260,8 @@ def process_query_results(main_rows, unified_external_rows):
         "G_Thiele_Innes": get_val(base, "g_thiele_innes"),
         "G_Thiele_Innes_Error": get_val(base, "g_thiele_innes_error"),
     }
+
+    fill_inclination_in_metadata(metadata)
 
     external_rvs = _external_rvs_from_unified_rows(unified_external_rows)
     return {"metadata": metadata, "external_rvs": external_rvs}
