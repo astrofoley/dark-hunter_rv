@@ -70,15 +70,19 @@ Ensure Apache serves `/var/www/html/darkhunter/rv/` (existing `Alias` or symlink
 | **GAIA DATA** | Link to `stars/Gaia_DR3_<id>/Gaia/` (star file directory) |
 | **SOURCE IMAGE** | UV image from legacy CSV (restored; not hidden) |
 | **DAYS SINCE LAST APF** | Days since latest APF pipeline epoch (sortable; drives &lt;7d / &lt;30d filters) |
-| **NEXT RV EVENT (DATE)** | Sooner of next max/min RV from **P & e fixed** fit, as `YYYY/MM/DD` |
+| **NEXT RV EVENT (DATE)** | Sooner of next max/min RV from **P & e fixed** fit, as `YYYY/MM/DD` (legacy `NEXT RV EVENT (MJD)` column is merged away on repair) |
 
 **Mass columns:**
 
 | Column | Meaning |
 |--------|---------|
+| **M1 (Msun)** | Luminous primary mass (catalog); **used first** for RV-derived M2 sin i / M2 at i |
 | **M2 (Msun)** | Gaia NSS astrometric secondary mass (`used_m2_msun`), not from the RV fit |
-| **M2sin i (Msun)** | RV-only Keplerian fit, with assumed M1 |
-| **(M2sin i)/(sin i) (Msun)** | Same RV-only f(M) and M1, with Gaia astrometric inclination |
+| **M2sin i (Msun)** | RV-only Keplerian fit f(M) with table M1 |
+| **(M2sin i)/(sin i) (Msun)** | Same f(M) and M1 with Gaia astrometric inclination |
+| **INCLINATION (deg)** | Astrometric i used for M2 at i (empty if unknown or edge-on) |
+
+**RV fit plots:** blue shaded regions mark APF visibility at Lick (airmass ≤ 2.5 for ≥15 min after −18° twilight, out to 3 months). Built via `scripts/build_apf_observability_cache.py` and stored in `rv_fit_reports/observability_windows_cache.json`. Circumpolar targets are annotated on the plot.
 
 ## Three commands (ziggy)
 
@@ -155,10 +159,13 @@ WEB_ROOT=/var/www/html/darkhunter/rv RUN_FITS=0 RUN_RV_PLOTS=1 MIN_POINTS=5 \
 ```bash
 cd /data2/darkhunter/dark-hunter_rv
 git pull
-bash scripts/repair_website_table.sh
+PREFETCH_GAIA_NSS=1 bash scripts/repair_website_table.sh
+PYTHONPATH=. python3 scripts/build_apf_observability_cache.py \
+  --data-csv /var/www/html/darkhunter/rv/tables/data.csv \
+  --output-dir /data2/darkhunter/dark-hunter_rv/output
 ```
 
-Hard-refresh the browser (Cmd+Shift+R). This deploys `script.js`, fixes column alignment, clears stray plot HTML, and fills **DAYS SINCE LAST APF** / mass / **NEXT RV EVENT** from existing summaries and `rv_fit_reports` JSON if they are already on disk.
+Hard-refresh the browser. After a code update that changes Keplerian fit logic or observability shading, rerun per-object refit (command 3) or full refresh (command 2).
 
 ### Step 2 — Full refresh when ready
 
