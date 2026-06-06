@@ -39,6 +39,12 @@ if [[ -f "$REPO/scripts/fix_data_csv_column_order.py" ]]; then
   "$PY" scripts/fix_data_csv_column_order.py --data-csv "$WEB_ROOT/tables/data.csv"
 fi
 
+echo "=== APF observability windows cache ==="
+"$PY" scripts/build_apf_observability_cache.py \
+  --data-csv "$WEB_ROOT/tables/data.csv" \
+  --output-dir "$REPO/output" \
+  --cache "$REPO/rv_fit_reports/observability_windows_cache.json"
+
 echo "=== Per-object pipeline + fit + website (see logs/refit_all_per_object.log) ==="
 bash scripts/refit_all_per_object.sh
 

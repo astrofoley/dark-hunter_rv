@@ -112,6 +112,7 @@ for gid in "${STAR_IDS[@]}"; do
     --reports-dir "$REPORTS_DIR"
     --use-gaia-nss
     --min-points "$MIN_POINTS"
+    --data-csv "$DATA_CSV"
   )
   if [[ "$FIT_FORCE" == "1" ]]; then
     fit_args+=(--force)
