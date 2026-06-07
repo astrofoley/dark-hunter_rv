@@ -16,6 +16,8 @@
   - `python3 validation/evaluate_method_consistency.py --diag-glob "output/*_diagnostics.csv" --out-dir validation_output/consistency`
 - Broad-line benchmark:
   - `python3 validation/benchmark_broad_lines.py --out-dir validation_output/broad_line`
+- Cool high-S/N mask precision (step 01; 0.1 km/s goal):
+  - `python -m validation.benchmark_cool_precision --diagnostics-glob 'output/Gaia_DR3_*_diagnostics.csv' --out-dir validation_output/benchmark_cool_precision`
 - Error model calibration:
   - `python3 validation/calibrate_error_model.py --diag-glob "output/*_diagnostics.csv" --out-dir validation_output/error_model`
 - Full campaign report:
