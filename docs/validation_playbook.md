@@ -26,6 +26,7 @@
   - `python -m validation.plot_chunk_residuals --diagnostics-glob 'output/Gaia_DR3_*_diagnostics.csv' --out-dir validation_output/chunk_residuals`
   - `--overlap-only` limits to phase-A overlap stars that pass the mask region cut.
   - Per object: `*_residuals_by_spectrum.png`, `*_chunk_weighted_mean.png`; sample: `sample_per_object_chunk_bias.png`.
+  - Default: iterative 10σ leave-one-out clip per spectrum (`--chunk-outlier-sigma 10`; `0` disables). Excluded chunks shown as gray × in spectrum plot.
 - Error model calibration:
   - `python3 validation/calibrate_error_model.py --diag-glob "output/*_diagnostics.csv" --out-dir validation_output/error_model`
 - Full campaign report:

@@ -63,6 +63,81 @@ def _ordered_chunks(chunk_keys: list[str]) -> list[str]:
     return sorted(set(chunk_keys), key=_chunk_sort_key)
 
 
+def _exposure_rv_weighted(rv: np.ndarray, err: np.ndarray) -> float:
+    ok = np.isfinite(rv) & np.isfinite(err) & (err > 0) & (err < 1e20)
+    if not np.any(ok):
+        v = rv[np.isfinite(rv)]
+        return float(np.mean(v)) if len(v) else float("nan")
+    v = rv[ok].astype(float)
+    e = err[ok].astype(float)
+    w = 1.0 / (e**2)
+    return float(np.sum(w * v) / np.sum(w))
+
+
+def iterative_loo_sigma_clip_mask(
+    rv: np.ndarray,
+    *,
+    nsigma: float = 10.0,
+    max_iter: int = 100,
+) -> np.ndarray:
+    """
+    Per-spectrum iterative leave-one-out clip: drop chunk *i* when
+    |RV_i − mean(RV_{j≠i})| > nsigma × RMS(RV_{j≠i}) until convergence.
+    """
+    rv = np.asarray(rv, float)
+    n = len(rv)
+    keep = np.ones(n, dtype=bool)
+    if n < 2:
+        return keep
+    for _ in range(max_iter):
+        removed_any = False
+        active = np.where(keep)[0]
+        if len(active) < 2:
+            break
+        for i in active:
+            others = rv[keep & (np.arange(n) != i)]
+            if len(others) < 1:
+                continue
+            mu = float(np.mean(others))
+            rms = float(np.std(others, ddof=1)) if len(others) > 1 else 0.0
+            if not np.isfinite(rms) or rms <= 0:
+                continue
+            if abs(float(rv[i]) - mu) > nsigma * rms:
+                keep[i] = False
+                removed_any = True
+        if not removed_any:
+            break
+    return keep
+
+
+def apply_spectrum_chunk_outlier_clip(
+    tab: pd.DataFrame,
+    *,
+    nsigma: float = 10.0,
+) -> pd.DataFrame:
+    """Mark chunk_kept per spectrum; recompute exposure_rv_kms and residual_kms from kept chunks."""
+    if tab.empty:
+        return tab
+    out = tab.copy()
+    out["chunk_kept"] = True
+    out["exposure_rv_kms_pipeline"] = out["exposure_rv_kms"]
+    out["residual_kms_pipeline"] = out["residual_kms"]
+
+    for file_label, g in out.groupby("file", sort=False):
+        idx = g.index.to_numpy()
+        rv = g["rv_kms"].astype(float).to_numpy()
+        err = g["rv_err_kms"].astype(float).to_numpy()
+        keep = iterative_loo_sigma_clip_mask(rv, nsigma=nsigma)
+        out.loc[idx, "chunk_kept"] = keep
+        if not np.any(keep):
+            continue
+        exp_rv = _exposure_rv_weighted(rv[keep], err[keep])
+        out.loc[idx[keep], "exposure_rv_kms"] = exp_rv
+        out.loc[idx[keep], "residual_kms"] = rv[keep] - exp_rv
+
+    return out
+
+
 def _weighted_mean_and_errors(
     values: np.ndarray,
     errs: np.ndarray,
@@ -187,10 +262,21 @@ def _plot_residuals_by_spectrum(
     gaia_id: str,
     name: str,
     out_path: Path,
+    clip_sigma: float | None,
 ) -> None:
-    chunks = _ordered_chunks(obj_df["chunk_key"].astype(str).tolist())
+    kept_df = obj_df[obj_df["chunk_kept"].astype(bool)] if "chunk_kept" in obj_df.columns else obj_df
+    excluded_df = (
+        obj_df[~obj_df["chunk_kept"].astype(bool)]
+        if "chunk_kept" in obj_df.columns
+        else obj_df.iloc[0:0]
+    )
+    chunks = _ordered_chunks(kept_df["chunk_key"].astype(str).tolist())
+    if excluded_df is not None and len(excluded_df):
+        chunks = _ordered_chunks(
+            chunks + excluded_df["chunk_key"].astype(str).tolist()
+        )
     chunk_to_x = {ck: i for i, ck in enumerate(chunks)}
-    spectra = obj_df.groupby("file", sort=False)
+    spectra = kept_df.groupby("file", sort=False)
     n_spec = spectra.ngroups
     cmap = plt.cm.viridis(np.linspace(0.15, 0.85, max(n_spec, 1)))
 
@@ -198,22 +284,34 @@ def _plot_residuals_by_spectrum(
     for i, (file_label, g) in enumerate(spectra):
         xs = [chunk_to_x[str(ck)] for ck in g["chunk_key"]]
         ys = g["residual_kms"].astype(float).values
-        stacked = g["used_in_exposure_stack"].astype(bool).values
         ax.scatter(
             xs,
             ys,
-            s=22 if np.all(stacked) else 14,
-            alpha=0.75 if np.all(stacked) else 0.35,
+            s=22,
+            alpha=0.8,
             c=[cmap[i]],
             edgecolors="none",
             label=Path(str(file_label)).stem[-24:],
+        )
+    if len(excluded_df):
+        ex_x = [chunk_to_x[str(ck)] for ck in excluded_df["chunk_key"]]
+        ax.scatter(
+            ex_x,
+            excluded_df["residual_kms_pipeline"].astype(float).values,
+            marker="x",
+            s=28,
+            c="0.55",
+            alpha=0.45,
+            linewidths=0.8,
+            label="excluded (>{}σ LOO)".format(clip_sigma) if clip_sigma else "excluded",
         )
     ax.axhline(0.0, color="gray", ls=":", lw=0.8)
     ax.set_xticks(range(len(chunks)))
     ax.set_xticklabels(chunks, rotation=90, fontsize=6)
     ax.set_xlabel("chunk_key")
     ax.set_ylabel("RV_chunk − RV_exposure (km/s)")
-    ax.set_title(f"{name} — chunk residuals by spectrum (mask-applicable)")
+    clip_note = f", {clip_sigma:g}σ LOO clip" if clip_sigma else ""
+    ax.set_title(f"{name} — chunk residuals by spectrum (mask-applicable{clip_note})")
     if n_spec <= 12:
         ax.legend(fontsize=6, loc="upper right", ncol=2)
     fig.tight_layout()
@@ -373,6 +471,7 @@ def run_plot_chunk_residuals(
     out_dir: Path,
     summary_dir: Path | None = None,
     gaia_ids: set[str] | None = None,
+    chunk_outlier_sigma: float | None = 10.0,
 ) -> dict[str, int]:
     out_dir.mkdir(parents=True, exist_ok=True)
     tab = _load_chunk_rows(diagnostics_glob)
@@ -383,24 +482,34 @@ def run_plot_chunk_residuals(
     if gaia_ids:
         tab = tab[tab["gaia_dr3_id"].astype(str).isin(gaia_ids)]
 
+    n_excluded = 0
+    if chunk_outlier_sigma is not None and chunk_outlier_sigma > 0:
+        tab = apply_spectrum_chunk_outlier_clip(tab, nsigma=chunk_outlier_sigma)
+        n_excluded = int((~tab["chunk_kept"].astype(bool)).sum())
+        tab_plot = tab[tab["chunk_kept"].astype(bool)].copy()
+    else:
+        tab_plot = tab
+
     name_lookup = _load_name_lookup(_REPO_ROOT)
     names: dict[str, str] = {}
     summaries: dict[str, pd.DataFrame] = {}
     n_objects = 0
 
-    for gid, obj_df in tab.groupby("gaia_dr3_id"):
+    for gid, obj_all in tab.groupby("gaia_dr3_id"):
         gid = str(gid)
         name = _object_name(gid, summary_dir, name_lookup)
         names[gid] = name
         obj_dir = out_dir / gid
         obj_dir.mkdir(parents=True, exist_ok=True)
-        obj_df.to_csv(obj_dir / "chunk_residuals_long.csv", index=False)
+        obj_all.to_csv(obj_dir / "chunk_residuals_long.csv", index=False)
+        obj_df = obj_all[obj_all["chunk_kept"].astype(bool)].copy() if "chunk_kept" in obj_all.columns else obj_all
 
         _plot_residuals_by_spectrum(
-            obj_df,
+            obj_all,
             gaia_id=gid,
             name=name,
             out_path=obj_dir / f"{name or gid}_residuals_by_spectrum.png",
+            clip_sigma=chunk_outlier_sigma,
         )
 
         summary = _summarize_chunks_per_object(obj_df)
@@ -412,7 +521,10 @@ def run_plot_chunk_residuals(
             gaia_id=gid,
             name=name,
             out_path=obj_dir / f"{name or gid}_chunk_weighted_mean.png",
-            title_suffix="per-chunk weighted mean across spectra",
+            title_suffix=(
+                "per-chunk weighted mean across spectra"
+                + (f" ({chunk_outlier_sigma:g}σ LOO clip)" if chunk_outlier_sigma else "")
+            ),
         )
         n_objects += 1
 
@@ -436,7 +548,13 @@ def run_plot_chunk_residuals(
     if bias_rows:
         pd.DataFrame(bias_rows).to_csv(out_dir / "per_object_chunk_bias.csv", index=False)
 
-    return {"n_objects": n_objects, "n_rows": int(len(tab)), "n_chunks_max": int(tab["chunk_key"].nunique())}
+    return {
+        "n_objects": n_objects,
+        "n_rows": int(len(tab_plot)),
+        "n_rows_total": int(len(tab)),
+        "n_chunks_excluded": n_excluded,
+        "n_chunks_max": int(tab_plot["chunk_key"].nunique()) if len(tab_plot) else 0,
+    }
 
 
 def main() -> None:
@@ -448,6 +566,12 @@ def main() -> None:
         "--overlap-only",
         action="store_true",
         help="Restrict to stars in calibration/literature overlap (phase A overlap_stars.csv if present)",
+    )
+    ap.add_argument(
+        "--chunk-outlier-sigma",
+        type=float,
+        default=10.0,
+        help="Iterative leave-one-out clip: exclude chunk RVs > N×RMS(other chunks) per spectrum (0=off)",
     )
     ap.add_argument("--log-level", default="INFO")
     args = ap.parse_args()
@@ -461,11 +585,13 @@ def main() -> None:
         else:
             logger.warning("overlap_stars.csv not found; using all mask-applicable objects")
 
+    clip_sigma = float(args.chunk_outlier_sigma) if args.chunk_outlier_sigma > 0 else None
     stats = run_plot_chunk_residuals(
         diagnostics_glob=args.diagnostics_glob,
         out_dir=args.out_dir,
         summary_dir=args.summary_dir,
         gaia_ids=gaia_ids,
+        chunk_outlier_sigma=clip_sigma,
     )
     logger.info("Wrote chunk residual plots to %s (%s)", args.out_dir, stats)
 
