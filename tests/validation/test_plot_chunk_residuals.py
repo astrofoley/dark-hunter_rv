@@ -9,6 +9,7 @@ from validation.plot_chunk_residuals import (
     _ordered_chunks,
     _summarize_chunks_per_object,
     _weighted_mean_and_errors,
+    apply_sample_object_bias_clip,
     apply_spectrum_chunk_outlier_clip,
     iterative_spectrum_chunk_clip_mask,
 )
@@ -64,6 +65,39 @@ def test_apply_spectrum_chunk_outlier_clip() -> None:
     kept = out[out["chunk_kept"]]
     assert len(kept) == 2
     assert kept["residual_kms"].abs().max() < 0.2
+
+
+def test_apply_sample_object_bias_clip() -> None:
+    import pandas as pd
+
+    df = pd.DataFrame(
+        [
+            {
+                "gaia_dr3_id": "1",
+                "chunk_key": "10",
+                "weighted_mean_residual_kms": 0.1,
+                "statistical_err_kms": 0.05,
+                "intrinsic_scatter_kms": 0.02,
+            },
+            {
+                "gaia_dr3_id": "2",
+                "chunk_key": "10",
+                "weighted_mean_residual_kms": 0.15,
+                "statistical_err_kms": 0.05,
+                "intrinsic_scatter_kms": 0.02,
+            },
+            {
+                "gaia_dr3_id": "3",
+                "chunk_key": "10",
+                "weighted_mean_residual_kms": 25.0,
+                "statistical_err_kms": 0.05,
+                "intrinsic_scatter_kms": 0.02,
+            },
+        ]
+    )
+    out = apply_sample_object_bias_clip(df, nsigma=5.0, max_delta_kms=10.0)
+    assert bool(out.loc[out["gaia_dr3_id"] == "3", "sample_kept"].iloc[0]) is False
+    assert out.loc[out["gaia_dr3_id"].isin(["1", "2"]), "sample_kept"].all()
 
 
 def test_summarize_chunks_per_object() -> None:

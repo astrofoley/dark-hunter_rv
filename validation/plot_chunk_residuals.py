@@ -439,57 +439,120 @@ def _plot_chunk_weighted_mean(
     plt.close(fig)
 
 
+def _combined_object_bias_err(stat: np.ndarray, intrinsic: np.ndarray) -> np.ndarray:
+    s = np.where(np.isfinite(stat), stat, 0.0)
+    i = np.where(np.isfinite(intrinsic), intrinsic, 0.0)
+    e = np.sqrt(s**2 + i**2)
+    e = np.where(e > 0, e, np.nan)
+    return e
+
+
+def apply_sample_object_bias_clip(
+    bias_df: pd.DataFrame,
+    *,
+    nsigma: float = 5.0,
+    max_delta_kms: float = 10.0,
+) -> pd.DataFrame:
+    """Per chunk_key, clip per-object bias values before full-sample aggregation."""
+    if bias_df.empty:
+        return bias_df
+    out = bias_df.copy()
+    out["sample_kept"] = True
+    stat_col = out["statistical_err_kms"].astype(float).values
+    int_col = out["intrinsic_scatter_kms"].astype(float).values
+    err = _combined_object_bias_err(stat_col, int_col)
+
+    for _, g in out.groupby("chunk_key"):
+        idx = g.index.to_numpy()
+        rv = g["weighted_mean_residual_kms"].astype(float).to_numpy()
+        e = err[g.index]
+        keep = iterative_spectrum_chunk_clip_mask(
+            rv, e, nsigma=nsigma, max_delta_kms=max_delta_kms
+        )
+        out.loc[idx, "sample_kept"] = keep
+    return out
+
+
 def _plot_sample_per_object_bias(
-    all_summaries: dict[str, pd.DataFrame],
+    bias_df: pd.DataFrame,
     names: dict[str, str],
     out_path: Path,
+    *,
+    sample_sigma: float | None,
+    sample_max_delta_kms: float | None,
 ) -> None:
-    if not all_summaries:
+    if bias_df.empty:
         return
-    chunk_set: set[str] = set()
-    for sdf in all_summaries.values():
-        chunk_set.update(sdf["chunk_key"].astype(str).tolist())
+    chunk_set = set(bias_df["chunk_key"].astype(str).tolist())
     chunks = _ordered_chunks(list(chunk_set))
     chunk_to_x = {ck: i for i, ck in enumerate(chunks)}
-    cmap = plt.cm.tab20(np.linspace(0, 1, max(len(all_summaries), 1)))
+    gids = sorted(bias_df["gaia_dr3_id"].astype(str).unique())
+    cmap = plt.cm.tab20(np.linspace(0, 1, max(len(gids), 1)))
+    gid_to_j = {gid: j for j, gid in enumerate(gids)}
 
     fig, ax = plt.subplots(figsize=(max(10, len(chunks) * 0.25), 6))
-    overall_rows = []
-    for j, (gid, sdf) in enumerate(sorted(all_summaries.items())):
+    kept = bias_df[bias_df["sample_kept"].astype(bool)] if "sample_kept" in bias_df.columns else bias_df
+    excluded = bias_df[~bias_df["sample_kept"].astype(bool)] if "sample_kept" in bias_df.columns else bias_df.iloc[0:0]
+
+    for _, r in kept.iterrows():
+        gid = str(r["gaia_dr3_id"])
+        ck = str(r["chunk_key"])
+        if ck not in chunk_to_x:
+            continue
+        j = gid_to_j.get(gid, 0)
+        x = chunk_to_x[ck] + (j - len(gids) / 2) * 0.02
         label = names.get(gid, gid[:12])
-        for _, r in sdf.iterrows():
+        ax.scatter(
+            x,
+            float(r["weighted_mean_residual_kms"]),
+            s=28,
+            alpha=0.8,
+            c=[cmap[j % len(cmap)]],
+            label=label if chunk_to_x[ck] == 0 else None,
+        )
+
+    if len(excluded):
+        for _, r in excluded.iterrows():
             ck = str(r["chunk_key"])
             if ck not in chunk_to_x:
                 continue
-            x = chunk_to_x[ck] + (j - len(all_summaries) / 2) * 0.02
+            gid = str(r["gaia_dr3_id"])
+            j = gid_to_j.get(gid, 0)
+            x = chunk_to_x[ck] + (j - len(gids) / 2) * 0.02
             ax.scatter(
                 x,
                 float(r["weighted_mean_residual_kms"]),
-                s=28,
-                alpha=0.8,
-                c=[cmap[j % len(cmap)]],
-                label=label if chunk_to_x[ck] == 0 else None,
+                marker="x",
+                s=24,
+                c="0.55",
+                alpha=0.45,
+                linewidths=0.8,
             )
-        overall_rows.append(sdf)
+        ax.scatter(
+            [],
+            [],
+            marker="x",
+            c="0.55",
+            label=_clip_legend_label(sample_sigma, sample_max_delta_kms),
+        )
 
-    if overall_rows:
-        comb = pd.concat(overall_rows, ignore_index=True)
-        ox, oy, ostat, oint = [], [], [], []
-        for ck in chunks:
-            g = comb[comb["chunk_key"] == ck]
-            if g.empty:
-                continue
-            mu, stat, intrinsic = _weighted_mean_and_errors(
-                g["weighted_mean_residual_kms"].astype(float).values,
-                np.sqrt(
-                    g["statistical_err_kms"].astype(float) ** 2
-                    + g["intrinsic_scatter_kms"].astype(float) ** 2
-                ),
-            )
-            ox.append(chunk_to_x[ck])
-            oy.append(mu)
-            ostat.append(stat if np.isfinite(stat) else 0.0)
-            oint.append(intrinsic if np.isfinite(intrinsic) else 0.0)
+    ox, oy, ostat, oint = [], [], [], []
+    for ck in chunks:
+        g = kept[kept["chunk_key"].astype(str) == ck]
+        if g.empty:
+            continue
+        mu, stat, intrinsic = _weighted_mean_and_errors(
+            g["weighted_mean_residual_kms"].astype(float).values,
+            _combined_object_bias_err(
+                g["statistical_err_kms"].astype(float).values,
+                g["intrinsic_scatter_kms"].astype(float).values,
+            ),
+        )
+        ox.append(chunk_to_x[ck])
+        oy.append(mu)
+        ostat.append(stat if np.isfinite(stat) else 0.0)
+        oint.append(intrinsic if np.isfinite(intrinsic) else 0.0)
+    if ox:
         ox = np.asarray(ox, float)
         oy = np.asarray(oy, float)
         ostat = np.asarray(ostat, float)
@@ -502,7 +565,8 @@ def _plot_sample_per_object_bias(
     ax.set_xticklabels(chunks, rotation=90, fontsize=6)
     ax.set_xlabel("chunk_key")
     ax.set_ylabel("per-object weighted mean chunk bias (km/s)")
-    ax.set_title("Sample: per-object chunk bias (points) and cross-object weighted mean (diamonds)")
+    clip_note = _clip_title_note(sample_sigma, sample_max_delta_kms)
+    ax.set_title(f"Sample: per-object chunk bias and cross-object mean{clip_note}")
     ax.legend(fontsize=6, loc="upper right", ncol=2)
     fig.tight_layout()
     fig.savefig(out_path, dpi=130)
@@ -517,6 +581,8 @@ def run_plot_chunk_residuals(
     gaia_ids: set[str] | None = None,
     chunk_outlier_sigma: float | None = 10.0,
     chunk_max_delta_kms: float | None = 30.0,
+    sample_outlier_sigma: float | None = 5.0,
+    sample_max_delta_kms: float | None = 10.0,
 ) -> dict[str, int]:
     out_dir.mkdir(parents=True, exist_ok=True)
     tab = _load_chunk_rows(diagnostics_glob)
@@ -582,13 +648,6 @@ def run_plot_chunk_residuals(
         )
         n_objects += 1
 
-    _plot_sample_per_object_bias(
-        summaries,
-        names,
-        out_dir / "sample_per_object_chunk_bias.png",
-    )
-
-    # Combined per-object bias table (one row per object per chunk)
     bias_rows = []
     for gid, sdf in summaries.items():
         for _, r in sdf.iterrows():
@@ -599,14 +658,37 @@ def run_plot_chunk_residuals(
                     **r.to_dict(),
                 }
             )
-    if bias_rows:
-        pd.DataFrame(bias_rows).to_csv(out_dir / "per_object_chunk_bias.csv", index=False)
+    bias_df = pd.DataFrame(bias_rows) if bias_rows else pd.DataFrame()
+    n_sample_excluded = 0
+    sample_clip_enabled = (
+        (sample_outlier_sigma is not None and sample_outlier_sigma > 0)
+        or (sample_max_delta_kms is not None and sample_max_delta_kms > 0)
+    )
+    if not bias_df.empty and sample_clip_enabled:
+        bias_df = apply_sample_object_bias_clip(
+            bias_df,
+            nsigma=float(sample_outlier_sigma or 0.0),
+            max_delta_kms=float(sample_max_delta_kms or 0.0),
+        )
+        n_sample_excluded = int((~bias_df["sample_kept"].astype(bool)).sum())
+
+    if not bias_df.empty:
+        bias_df.to_csv(out_dir / "per_object_chunk_bias.csv", index=False)
+
+    _plot_sample_per_object_bias(
+        bias_df,
+        names,
+        out_dir / "sample_per_object_chunk_bias.png",
+        sample_sigma=sample_outlier_sigma,
+        sample_max_delta_kms=sample_max_delta_kms,
+    )
 
     return {
         "n_objects": n_objects,
         "n_rows": int(len(tab_plot)),
         "n_rows_total": int(len(tab)),
         "n_chunks_excluded": n_excluded,
+        "n_sample_bias_excluded": n_sample_excluded,
         "n_chunks_max": int(tab_plot["chunk_key"].nunique()) if len(tab_plot) else 0,
     }
 
@@ -633,6 +715,18 @@ def main() -> None:
         default=30.0,
         help="Iterative clip: exclude chunk RVs > N km/s from weighted mean per spectrum (0=off)",
     )
+    ap.add_argument(
+        "--sample-outlier-sigma",
+        type=float,
+        default=5.0,
+        help="Full-sample clip: per chunk, exclude object biases > N×RMS(other objects) (0=off)",
+    )
+    ap.add_argument(
+        "--sample-max-delta-kms",
+        type=float,
+        default=10.0,
+        help="Full-sample clip: per chunk, exclude object biases > N km/s from weighted mean (0=off)",
+    )
     ap.add_argument("--log-level", default="INFO")
     args = ap.parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
@@ -647,6 +741,8 @@ def main() -> None:
 
     clip_sigma = float(args.chunk_outlier_sigma) if args.chunk_outlier_sigma > 0 else None
     clip_delta = float(args.chunk_max_delta_kms) if args.chunk_max_delta_kms > 0 else None
+    sample_sigma = float(args.sample_outlier_sigma) if args.sample_outlier_sigma > 0 else None
+    sample_delta = float(args.sample_max_delta_kms) if args.sample_max_delta_kms > 0 else None
     stats = run_plot_chunk_residuals(
         diagnostics_glob=args.diagnostics_glob,
         out_dir=args.out_dir,
@@ -654,6 +750,8 @@ def main() -> None:
         gaia_ids=gaia_ids,
         chunk_outlier_sigma=clip_sigma,
         chunk_max_delta_kms=clip_delta,
+        sample_outlier_sigma=sample_sigma,
+        sample_max_delta_kms=sample_delta,
     )
     logger.info("Wrote chunk residual plots to %s (%s)", args.out_dir, stats)
 
