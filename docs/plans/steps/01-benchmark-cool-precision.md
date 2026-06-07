@@ -37,9 +37,12 @@ Quantify current APF mask-CCF precision on cool, high-S/N calibration spectra an
 
 - [x] Define metric: per-exposure chunk scatter (initial); night-pair / jackknife deferred
 - [x] `validation/benchmark_cool_precision.py` for cool-star high-S/N subset
+- [x] Phase A: `validation/rv_phase_a_baseline.py` — overlap inventory, absolute (APF–lit) and relative (APF–APF) gates, diagnostic plots
+- [x] Frozen baseline: `calibration/phase_a_baseline/` (goals.yaml, reference_manifest.json)
 - [ ] Produce `validation_output/benchmark_cool_precision/` tables + plots (RMS vs log10 mask CCF S/N)
 - [ ] Document 0.1 km/s goal interpretation (single epoch vs night-mean) in report README or playbook
 - [ ] Record baseline numbers in step md for step 02 comparison
+- [ ] `--no-bias` pipeline rerun on overlap stars for canonical absolute gate
 
 ## Key files
 
@@ -60,7 +63,19 @@ python -m validation.rv_method_overlap_report --diagnostics-glob 'output/Gaia_DR
 
 - Report identifies median/p90 chunk scatter for cool stars with `log10(median_mask_ccf_peak_snr) > 1.0`
 - Explicit statement: met / not met / how far from 0.1 km/s goal
+- Phase A overlap list + gate reports under `validation_output/rv_phase_a_baseline/`
 - Reproducible one-command recipe in `docs/validation_playbook.md`
+
+### Phase A baseline (2026-06-07, bias applied)
+
+| Metric | Value |
+|--------|-------|
+| Overlap stars (APF ∩ literature) | 8 |
+| APF–literature pairs (7 d window) | 0 (min separation 189–971 d) |
+| APF–APF pairs (7 d) | 14 across 4 stars |
+| Relative gate median \|ΔRV\| | 0.30 km/s |
+| Relative gate p90 \|ΔRV\| | 16.3 km/s (outliers: Gaia BH1, J1449+6919) |
+| Stars with good relative precision | J2102+3703 (~0.009 km/s), J0824+5254 (~0.30 km/s) |
 
 ## Tests / validation
 
