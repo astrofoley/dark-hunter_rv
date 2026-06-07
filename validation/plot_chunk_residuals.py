@@ -1,0 +1,474 @@
+#!/usr/bin/env python3
+"""
+Per-object mask-CCF chunk residual diagnostics (cool / mask-applicable stars only).
+
+For each object with stellar-mask-applicable exposures:
+
+1. ``*_residuals_by_spectrum.png`` — RV_chunk − RV_exposure for every chunk and spectrum.
+2. ``*_chunk_weighted_mean.png`` — per-chunk weighted mean residual across spectra with
+   statistical and intrinsic-scatter error bars.
+3. ``sample_per_object_chunk_bias.png`` — per-chunk points = each object's weighted mean bias;
+   overlay = sample-wide weighted mean across objects (stat + intrinsic error bars).
+
+Example::
+
+  cd /Users/rfoley/darkhunter/rvs/dark-hunter_rv
+  python -m validation.plot_chunk_residuals \\
+    --diagnostics-glob 'output/Gaia_DR3_*_diagnostics.csv' \\
+    --out-dir validation_output/chunk_residuals
+"""
+from __future__ import annotations
+
+import argparse
+import logging
+import re
+import sys
+from glob import glob as glob_paths
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from darkhunter_rv.method_evaluation import exposure_method_flags, median_mask_ccf_peak_snr  # noqa: E402
+from darkhunter_rv.method_regions import region_mask_applicable  # noqa: E402
+from darkhunter_rv.summary_paths import parse_object_id_from_summary, discover_summary_files  # noqa: E402
+
+logger = logging.getLogger(__name__)
+
+
+def _parse_gaia_id_from_path(path: str | Path) -> str | None:
+    m = re.search(r"Gaia_DR3_(\d{18,19})", str(path))
+    return m.group(1) if m else None
+
+
+def _chunk_sort_key(chunk_key: str) -> tuple[int, int]:
+    parts = str(chunk_key).split("_")
+    try:
+        order = int(parts[0])
+    except ValueError:
+        order = 9999
+    sub = int(parts[1]) if len(parts) > 1 else 0
+    return (order, sub)
+
+
+def _ordered_chunks(chunk_keys: list[str]) -> list[str]:
+    return sorted(set(chunk_keys), key=_chunk_sort_key)
+
+
+def _weighted_mean_and_errors(
+    values: np.ndarray,
+    errs: np.ndarray,
+) -> tuple[float, float, float]:
+    """Return (weighted_mean, statistical_err, intrinsic_scatter)."""
+    ok = np.isfinite(values) & np.isfinite(errs) & (errs > 0) & (errs < 1e20)
+    if not np.any(ok):
+        v = values[np.isfinite(values)]
+        if len(v) == 0:
+            return float("nan"), float("nan"), float("nan")
+        return float(np.mean(v)), float("nan"), float(np.std(v, ddof=1)) if len(v) > 1 else 0.0
+    v = values[ok].astype(float)
+    e = errs[ok].astype(float)
+    w = 1.0 / (e**2)
+    mu = float(np.sum(w * v) / np.sum(w))
+    stat = float(1.0 / np.sqrt(np.sum(w)))
+    if len(v) > 1:
+        resid = v - mu
+        var_int = max(0.0, float(np.var(resid, ddof=1)) - stat**2)
+        intrinsic = float(np.sqrt(var_int))
+    else:
+        intrinsic = 0.0
+    return mu, stat, intrinsic
+
+
+def _load_chunk_rows(diagnostics_glob: str) -> pd.DataFrame:
+    rows: list[dict] = []
+    for path in sorted(glob_paths(diagnostics_glob)):
+        gaia_id = _parse_gaia_id_from_path(path)
+        if not gaia_id:
+            continue
+        df = pd.read_csv(path)
+        if df.empty:
+            continue
+        chunk_rows = [
+            r for _, r in df.iterrows() if str(r.get("chunk_key", "")) != "all"
+        ]
+        if not chunk_rows:
+            continue
+        flags = exposure_method_flags(chunk_rows)
+        teff = float(chunk_rows[0].get("teff", np.nan))
+        snr_med = float(flags.get("median_mask_ccf_peak_snr", np.nan))
+        log_snr = float(np.log10(snr_med)) if np.isfinite(snr_med) and snr_med > 0 else np.nan
+        if not bool(region_mask_applicable(np.array([teff]), np.array([log_snr]))[0]):
+            continue
+        exposure_rv = float(chunk_rows[0].get("exposure_rv_kms", np.nan))
+        if not np.isfinite(exposure_rv):
+            exposure_rv = float(flags.get("mask_rv_kms", np.nan))
+        stem = Path(path).stem.replace("_diagnostics", "")
+        file_label = str(chunk_rows[0].get("file", stem))
+        mjd = float(chunk_rows[0].get("mjd", np.nan))
+        for r in chunk_rows:
+            if str(r.get("method", "")) != "mask_ccf":
+                continue
+            ck = str(r.get("chunk_key", ""))
+            rv = float(r.get("rv_kms", np.nan))
+            if not np.isfinite(rv) or not np.isfinite(exposure_rv):
+                continue
+            resid = float(r.get("residual_to_exposure_kms", np.nan))
+            if not np.isfinite(resid):
+                resid = rv - exposure_rv
+            rows.append(
+                {
+                    "gaia_dr3_id": gaia_id,
+                    "file": file_label,
+                    "mjd": mjd,
+                    "teff": teff,
+                    "log10_median_mask_ccf_peak_snr": log_snr,
+                    "chunk_key": ck,
+                    "chunk_order": _chunk_sort_key(ck)[0],
+                    "rv_kms": rv,
+                    "rv_err_kms": float(r.get("rv_err_kms", np.nan)),
+                    "exposure_rv_kms": exposure_rv,
+                    "residual_kms": resid,
+                    "used_in_exposure_stack": bool(r.get("used_in_exposure_stack", False)),
+                    "qc_pass": bool(r.get("qc_pass", True)),
+                    "diagnostics_path": str(path),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _load_name_lookup(repo_root: Path) -> dict[str, str]:
+    names: dict[str, str] = {}
+    lit = repo_root / "calibration" / "literature_rv_master.csv"
+    if lit.is_file():
+        df = pd.read_csv(lit)
+        for _, r in df.iterrows():
+            gid = str(r.get("gaia_dr3_id", ""))
+            nm = str(r.get("name", "")).strip()
+            if gid and nm and gid not in names:
+                names[gid] = nm
+    overlap = repo_root / "validation_output" / "rv_phase_a_baseline" / "overlap_stars.csv"
+    if overlap.is_file():
+        df = pd.read_csv(overlap)
+        for _, r in df.iterrows():
+            gid = str(r.get("gaia_dr3_id", ""))
+            nm = str(r.get("name", "")).strip()
+            if gid and nm:
+                names[gid] = nm
+    return names
+
+
+def _object_name(gaia_id: str, summary_dir: Path | None, name_lookup: dict[str, str]) -> str:
+    if gaia_id in name_lookup:
+        return name_lookup[gaia_id]
+    if summary_dir is not None:
+        for sp in discover_summary_files(summary_dir):
+            if parse_object_id_from_summary(sp) == gaia_id:
+                stem = sp.stem.replace("_summary", "")
+                if stem.startswith("Gaia_DR3_"):
+                    tag = stem.replace(f"Gaia_DR3_{gaia_id}", "").strip("_")
+                    if tag:
+                        return tag
+                return stem
+    return gaia_id
+
+
+def _plot_residuals_by_spectrum(
+    obj_df: pd.DataFrame,
+    *,
+    gaia_id: str,
+    name: str,
+    out_path: Path,
+) -> None:
+    chunks = _ordered_chunks(obj_df["chunk_key"].astype(str).tolist())
+    chunk_to_x = {ck: i for i, ck in enumerate(chunks)}
+    spectra = obj_df.groupby("file", sort=False)
+    n_spec = spectra.ngroups
+    cmap = plt.cm.viridis(np.linspace(0.15, 0.85, max(n_spec, 1)))
+
+    fig, ax = plt.subplots(figsize=(max(8, len(chunks) * 0.22), 5))
+    for i, (file_label, g) in enumerate(spectra):
+        xs = [chunk_to_x[str(ck)] for ck in g["chunk_key"]]
+        ys = g["residual_kms"].astype(float).values
+        stacked = g["used_in_exposure_stack"].astype(bool).values
+        ax.scatter(
+            xs,
+            ys,
+            s=22 if np.all(stacked) else 14,
+            alpha=0.75 if np.all(stacked) else 0.35,
+            c=[cmap[i]],
+            edgecolors="none",
+            label=Path(str(file_label)).stem[-24:],
+        )
+    ax.axhline(0.0, color="gray", ls=":", lw=0.8)
+    ax.set_xticks(range(len(chunks)))
+    ax.set_xticklabels(chunks, rotation=90, fontsize=6)
+    ax.set_xlabel("chunk_key")
+    ax.set_ylabel("RV_chunk − RV_exposure (km/s)")
+    ax.set_title(f"{name} — chunk residuals by spectrum (mask-applicable)")
+    if n_spec <= 12:
+        ax.legend(fontsize=6, loc="upper right", ncol=2)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=130)
+    plt.close(fig)
+
+
+def _summarize_chunks_per_object(obj_df: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for ck, g in obj_df.groupby("chunk_key"):
+        mu, stat, intrinsic = _weighted_mean_and_errors(
+            g["residual_kms"].astype(float).values,
+            g["rv_err_kms"].astype(float).values,
+        )
+        rows.append(
+            {
+                "chunk_key": str(ck),
+                "chunk_order": _chunk_sort_key(str(ck))[0],
+                "n_spectra": int(g["file"].nunique()),
+                "weighted_mean_residual_kms": mu,
+                "statistical_err_kms": stat,
+                "intrinsic_scatter_kms": intrinsic,
+            }
+        )
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    return out.sort_values(["chunk_order", "chunk_key"]).reset_index(drop=True)
+
+
+def _plot_chunk_weighted_mean(
+    summary: pd.DataFrame,
+    *,
+    gaia_id: str,
+    name: str,
+    out_path: Path,
+    title_suffix: str,
+) -> None:
+    if summary.empty:
+        return
+    chunks = summary["chunk_key"].astype(str).tolist()
+    x = np.arange(len(chunks))
+    mu = summary["weighted_mean_residual_kms"].astype(float).values
+    stat = summary["statistical_err_kms"].astype(float).values
+    intrinsic = summary["intrinsic_scatter_kms"].astype(float).values
+    stat = np.where(np.isfinite(stat), stat, 0.0)
+    intrinsic = np.where(np.isfinite(intrinsic), intrinsic, 0.0)
+
+    fig, ax = plt.subplots(figsize=(max(8, len(chunks) * 0.22), 5))
+    ax.axhline(0.0, color="gray", ls=":", lw=0.8)
+    ax.errorbar(
+        x,
+        mu,
+        yerr=stat,
+        fmt="o",
+        color="#2166ac",
+        ecolor="#2166ac",
+        capsize=2,
+        label="statistical σ",
+        zorder=3,
+    )
+    ax.errorbar(
+        x,
+        mu,
+        yerr=intrinsic,
+        fmt="none",
+        ecolor="#b2182b",
+        capsize=4,
+        elinewidth=1.5,
+        label="intrinsic scatter σ",
+        zorder=2,
+    )
+    ax.set_xticks(x)
+    ax.set_xticklabels(chunks, rotation=90, fontsize=6)
+    ax.set_xlabel("chunk_key")
+    ax.set_ylabel("weighted mean residual (km/s)")
+    ax.set_title(f"{name} — {title_suffix}")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=130)
+    plt.close(fig)
+
+
+def _plot_sample_per_object_bias(
+    all_summaries: dict[str, pd.DataFrame],
+    names: dict[str, str],
+    out_path: Path,
+) -> None:
+    if not all_summaries:
+        return
+    chunk_set: set[str] = set()
+    for sdf in all_summaries.values():
+        chunk_set.update(sdf["chunk_key"].astype(str).tolist())
+    chunks = _ordered_chunks(list(chunk_set))
+    chunk_to_x = {ck: i for i, ck in enumerate(chunks)}
+    cmap = plt.cm.tab20(np.linspace(0, 1, max(len(all_summaries), 1)))
+
+    fig, ax = plt.subplots(figsize=(max(10, len(chunks) * 0.25), 6))
+    overall_rows = []
+    for j, (gid, sdf) in enumerate(sorted(all_summaries.items())):
+        label = names.get(gid, gid[:12])
+        for _, r in sdf.iterrows():
+            ck = str(r["chunk_key"])
+            if ck not in chunk_to_x:
+                continue
+            x = chunk_to_x[ck] + (j - len(all_summaries) / 2) * 0.02
+            ax.scatter(
+                x,
+                float(r["weighted_mean_residual_kms"]),
+                s=28,
+                alpha=0.8,
+                c=[cmap[j % len(cmap)]],
+                label=label if chunk_to_x[ck] == 0 else None,
+            )
+        overall_rows.append(sdf)
+
+    if overall_rows:
+        comb = pd.concat(overall_rows, ignore_index=True)
+        ox, oy, ostat, oint = [], [], [], []
+        for ck in chunks:
+            g = comb[comb["chunk_key"] == ck]
+            if g.empty:
+                continue
+            mu, stat, intrinsic = _weighted_mean_and_errors(
+                g["weighted_mean_residual_kms"].astype(float).values,
+                np.sqrt(
+                    g["statistical_err_kms"].astype(float) ** 2
+                    + g["intrinsic_scatter_kms"].astype(float) ** 2
+                ),
+            )
+            ox.append(chunk_to_x[ck])
+            oy.append(mu)
+            ostat.append(stat if np.isfinite(stat) else 0.0)
+            oint.append(intrinsic if np.isfinite(intrinsic) else 0.0)
+        ox = np.asarray(ox, float)
+        oy = np.asarray(oy, float)
+        ostat = np.asarray(ostat, float)
+        oint = np.asarray(oint, float)
+        ax.errorbar(ox, oy, yerr=ostat, fmt="D", color="black", ms=6, capsize=2, label="sample mean (stat)", zorder=5)
+        ax.errorbar(ox, oy, yerr=oint, fmt="none", ecolor="black", capsize=5, elinewidth=2, label="sample mean (intrinsic)", zorder=4)
+
+    ax.axhline(0.0, color="gray", ls=":", lw=0.8)
+    ax.set_xticks(range(len(chunks)))
+    ax.set_xticklabels(chunks, rotation=90, fontsize=6)
+    ax.set_xlabel("chunk_key")
+    ax.set_ylabel("per-object weighted mean chunk bias (km/s)")
+    ax.set_title("Sample: per-object chunk bias (points) and cross-object weighted mean (diamonds)")
+    ax.legend(fontsize=6, loc="upper right", ncol=2)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=130)
+    plt.close(fig)
+
+
+def run_plot_chunk_residuals(
+    *,
+    diagnostics_glob: str,
+    out_dir: Path,
+    summary_dir: Path | None = None,
+    gaia_ids: set[str] | None = None,
+) -> dict[str, int]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tab = _load_chunk_rows(diagnostics_glob)
+    if tab.empty:
+        logger.warning("No mask-applicable chunk rows matched %s", diagnostics_glob)
+        return {"n_objects": 0, "n_rows": 0}
+
+    if gaia_ids:
+        tab = tab[tab["gaia_dr3_id"].astype(str).isin(gaia_ids)]
+
+    name_lookup = _load_name_lookup(_REPO_ROOT)
+    names: dict[str, str] = {}
+    summaries: dict[str, pd.DataFrame] = {}
+    n_objects = 0
+
+    for gid, obj_df in tab.groupby("gaia_dr3_id"):
+        gid = str(gid)
+        name = _object_name(gid, summary_dir, name_lookup)
+        names[gid] = name
+        obj_dir = out_dir / gid
+        obj_dir.mkdir(parents=True, exist_ok=True)
+        obj_df.to_csv(obj_dir / "chunk_residuals_long.csv", index=False)
+
+        _plot_residuals_by_spectrum(
+            obj_df,
+            gaia_id=gid,
+            name=name,
+            out_path=obj_dir / f"{name or gid}_residuals_by_spectrum.png",
+        )
+
+        summary = _summarize_chunks_per_object(obj_df)
+        summary.to_csv(obj_dir / "chunk_weighted_summary.csv", index=False)
+        summaries[gid] = summary
+
+        _plot_chunk_weighted_mean(
+            summary,
+            gaia_id=gid,
+            name=name,
+            out_path=obj_dir / f"{name or gid}_chunk_weighted_mean.png",
+            title_suffix="per-chunk weighted mean across spectra",
+        )
+        n_objects += 1
+
+    _plot_sample_per_object_bias(
+        summaries,
+        names,
+        out_dir / "sample_per_object_chunk_bias.png",
+    )
+
+    # Combined per-object bias table (one row per object per chunk)
+    bias_rows = []
+    for gid, sdf in summaries.items():
+        for _, r in sdf.iterrows():
+            bias_rows.append(
+                {
+                    "gaia_dr3_id": gid,
+                    "name": names.get(gid, gid),
+                    **r.to_dict(),
+                }
+            )
+    if bias_rows:
+        pd.DataFrame(bias_rows).to_csv(out_dir / "per_object_chunk_bias.csv", index=False)
+
+    return {"n_objects": n_objects, "n_rows": int(len(tab)), "n_chunks_max": int(tab["chunk_key"].nunique())}
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--diagnostics-glob", default="output/Gaia_DR3_*_diagnostics.csv")
+    ap.add_argument("--summary-dir", type=Path, default=_REPO_ROOT / "output")
+    ap.add_argument("--out-dir", type=Path, default=_REPO_ROOT / "validation_output" / "chunk_residuals")
+    ap.add_argument(
+        "--overlap-only",
+        action="store_true",
+        help="Restrict to stars in calibration/literature overlap (phase A overlap_stars.csv if present)",
+    )
+    ap.add_argument("--log-level", default="INFO")
+    args = ap.parse_args()
+    logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
+
+    gaia_ids: set[str] | None = None
+    if args.overlap_only:
+        overlap_csv = _REPO_ROOT / "validation_output" / "rv_phase_a_baseline" / "overlap_stars.csv"
+        if overlap_csv.is_file():
+            gaia_ids = set(pd.read_csv(overlap_csv)["gaia_dr3_id"].astype(str))
+        else:
+            logger.warning("overlap_stars.csv not found; using all mask-applicable objects")
+
+    stats = run_plot_chunk_residuals(
+        diagnostics_glob=args.diagnostics_glob,
+        out_dir=args.out_dir,
+        summary_dir=args.summary_dir,
+        gaia_ids=gaia_ids,
+    )
+    logger.info("Wrote chunk residual plots to %s (%s)", args.out_dir, stats)
+
+
+if __name__ == "__main__":
+    main()

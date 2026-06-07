@@ -22,6 +22,10 @@
   - `python -m validation.rv_phase_a_baseline --master calibration/literature_rv_master.csv --summary-dir output --diagnostics-glob 'output/Gaia_DR3_*_diagnostics.csv' --out-dir validation_output/rv_phase_a_baseline`
   - Absolute gate (APF vs literature, |ΔRV| < 1 km/s): use `--no-bias-correction-applied` after a `--no-bias` pipeline rerun on overlap stars.
   - Outputs: `overlap_stars.csv`, `pair_candidates.csv`, gate summaries, `plots/` (see `calibration/phase_a_baseline/README.md`).
+- **Chunk residuals** (mask-applicable cool stars; per-object and sample bias plots):
+  - `python -m validation.plot_chunk_residuals --diagnostics-glob 'output/Gaia_DR3_*_diagnostics.csv' --out-dir validation_output/chunk_residuals`
+  - `--overlap-only` limits to phase-A overlap stars that pass the mask region cut.
+  - Per object: `*_residuals_by_spectrum.png`, `*_chunk_weighted_mean.png`; sample: `sample_per_object_chunk_bias.png`.
 - Error model calibration:
   - `python3 validation/calibrate_error_model.py --diag-glob "output/*_diagnostics.csv" --out-dir validation_output/error_model`
 - Full campaign report:
