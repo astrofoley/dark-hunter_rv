@@ -100,16 +100,19 @@ def test_apply_sample_object_bias_clip() -> None:
     assert out.loc[out["gaia_dr3_id"].isin(["1", "2"]), "sample_kept"].all()
 
 
-def test_summarize_chunks_per_object() -> None:
+def test_summarize_chunks_per_object_min_measurements() -> None:
     import pandas as pd
 
     df = pd.DataFrame(
         [
             {"chunk_key": "1", "file": "a", "residual_kms": 0.1, "rv_err_kms": 0.05},
             {"chunk_key": "1", "file": "b", "residual_kms": 0.3, "rv_err_kms": 0.05},
+            {"chunk_key": "1", "file": "c", "residual_kms": 0.2, "rv_err_kms": 0.05},
             {"chunk_key": "2", "file": "a", "residual_kms": -0.2, "rv_err_kms": 0.05},
+            {"chunk_key": "2", "file": "b", "residual_kms": -0.1, "rv_err_kms": 0.05},
         ]
     )
-    s = _summarize_chunks_per_object(df)
-    assert len(s) == 2
-    assert "weighted_mean_residual_kms" in s.columns
+    s = _summarize_chunks_per_object(df, min_measurements=3)
+    assert len(s) == 1
+    assert s.iloc[0]["chunk_key"] == "1"
+    assert int(s.iloc[0]["n_measurements"]) == 3

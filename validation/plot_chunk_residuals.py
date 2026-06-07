@@ -43,6 +43,10 @@ from darkhunter_rv.summary_paths import parse_object_id_from_summary, discover_s
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_CHUNK_OUTLIER_SIGMA = 7.0
+DEFAULT_CHUNK_MAX_DELTA_KMS = 20.0
+DEFAULT_MIN_CHUNK_MEASUREMENTS = 3
+
 
 def _parse_gaia_id_from_path(path: str | Path) -> str | None:
     m = re.search(r"Gaia_DR3_(\d{18,19})", str(path))
@@ -363,9 +367,16 @@ def _plot_residuals_by_spectrum(
     plt.close(fig)
 
 
-def _summarize_chunks_per_object(obj_df: pd.DataFrame) -> pd.DataFrame:
+def _summarize_chunks_per_object(
+    obj_df: pd.DataFrame,
+    *,
+    min_measurements: int = DEFAULT_MIN_CHUNK_MEASUREMENTS,
+) -> pd.DataFrame:
     rows = []
     for ck, g in obj_df.groupby("chunk_key"):
+        n_meas = int(len(g))
+        if n_meas < min_measurements:
+            continue
         mu, stat, intrinsic = _weighted_mean_and_errors(
             g["residual_kms"].astype(float).values,
             g["rv_err_kms"].astype(float).values,
@@ -374,6 +385,7 @@ def _summarize_chunks_per_object(obj_df: pd.DataFrame) -> pd.DataFrame:
             {
                 "chunk_key": str(ck),
                 "chunk_order": _chunk_sort_key(str(ck))[0],
+                "n_measurements": n_meas,
                 "n_spectra": int(g["file"].nunique()),
                 "weighted_mean_residual_kms": mu,
                 "statistical_err_kms": stat,
@@ -579,10 +591,11 @@ def run_plot_chunk_residuals(
     out_dir: Path,
     summary_dir: Path | None = None,
     gaia_ids: set[str] | None = None,
-    chunk_outlier_sigma: float | None = 10.0,
-    chunk_max_delta_kms: float | None = 30.0,
+    chunk_outlier_sigma: float | None = DEFAULT_CHUNK_OUTLIER_SIGMA,
+    chunk_max_delta_kms: float | None = DEFAULT_CHUNK_MAX_DELTA_KMS,
     sample_outlier_sigma: float | None = 5.0,
     sample_max_delta_kms: float | None = 10.0,
+    min_chunk_measurements: int = DEFAULT_MIN_CHUNK_MEASUREMENTS,
 ) -> dict[str, int]:
     out_dir.mkdir(parents=True, exist_ok=True)
     tab = _load_chunk_rows(diagnostics_glob)
@@ -632,7 +645,7 @@ def run_plot_chunk_residuals(
             clip_max_delta_kms=chunk_max_delta_kms,
         )
 
-        summary = _summarize_chunks_per_object(obj_df)
+        summary = _summarize_chunks_per_object(obj_df, min_measurements=min_chunk_measurements)
         summary.to_csv(obj_dir / "chunk_weighted_summary.csv", index=False)
         summaries[gid] = summary
 
@@ -642,7 +655,7 @@ def run_plot_chunk_residuals(
             name=name,
             out_path=obj_dir / f"{name or gid}_chunk_weighted_mean.png",
             title_suffix=(
-                "per-chunk weighted mean across spectra"
+                f"per-chunk weighted mean (≥{min_chunk_measurements} surviving measurements)"
                 + _clip_title_note(chunk_outlier_sigma, chunk_max_delta_kms)
             ),
         )
@@ -706,14 +719,20 @@ def main() -> None:
     ap.add_argument(
         "--chunk-outlier-sigma",
         type=float,
-        default=10.0,
+        default=DEFAULT_CHUNK_OUTLIER_SIGMA,
         help="Iterative leave-one-out clip: exclude chunk RVs > N×RMS(other chunks) per spectrum (0=off)",
     )
     ap.add_argument(
         "--chunk-max-delta-kms",
         type=float,
-        default=30.0,
+        default=DEFAULT_CHUNK_MAX_DELTA_KMS,
         help="Iterative clip: exclude chunk RVs > N km/s from weighted mean per spectrum (0=off)",
+    )
+    ap.add_argument(
+        "--min-chunk-measurements",
+        type=int,
+        default=DEFAULT_MIN_CHUNK_MEASUREMENTS,
+        help="Per-object weighted mean: require at least N surviving chunk measurements per chunk_key",
     )
     ap.add_argument(
         "--sample-outlier-sigma",
@@ -752,6 +771,7 @@ def main() -> None:
         chunk_max_delta_kms=clip_delta,
         sample_outlier_sigma=sample_sigma,
         sample_max_delta_kms=sample_delta,
+        min_chunk_measurements=int(args.min_chunk_measurements),
     )
     logger.info("Wrote chunk residual plots to %s (%s)", args.out_dir, stats)
 
