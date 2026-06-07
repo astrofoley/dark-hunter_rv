@@ -74,37 +74,58 @@ def _exposure_rv_weighted(rv: np.ndarray, err: np.ndarray) -> float:
     return float(np.sum(w * v) / np.sum(w))
 
 
-def iterative_loo_sigma_clip_mask(
+def iterative_spectrum_chunk_clip_mask(
     rv: np.ndarray,
+    err: np.ndarray,
     *,
     nsigma: float = 10.0,
+    max_delta_kms: float = 30.0,
     max_iter: int = 100,
 ) -> np.ndarray:
     """
-    Per-spectrum iterative leave-one-out clip: drop chunk *i* when
-    |RV_i − mean(RV_{j≠i})| > nsigma × RMS(RV_{j≠i}) until convergence.
+    Per-spectrum iterative clip until convergence:
+
+    1. |RV_i − weighted_mean(kept)| > max_delta_kms
+    2. |RV_i − mean(RV_{j≠i})| > nsigma × RMS(RV_{j≠i})  (leave-one-out)
     """
     rv = np.asarray(rv, float)
+    err = np.asarray(err, float)
     n = len(rv)
     keep = np.ones(n, dtype=bool)
-    if n < 2:
+    if n < 1:
         return keep
+
+    use_delta = max_delta_kms is not None and np.isfinite(max_delta_kms) and max_delta_kms > 0
+    use_sigma = nsigma is not None and np.isfinite(nsigma) and nsigma > 0
+
     for _ in range(max_iter):
         removed_any = False
         active = np.where(keep)[0]
-        if len(active) < 2:
+        if len(active) == 0:
             break
-        for i in active:
-            others = rv[keep & (np.arange(n) != i)]
-            if len(others) < 1:
-                continue
-            mu = float(np.mean(others))
-            rms = float(np.std(others, ddof=1)) if len(others) > 1 else 0.0
-            if not np.isfinite(rms) or rms <= 0:
-                continue
-            if abs(float(rv[i]) - mu) > nsigma * rms:
-                keep[i] = False
-                removed_any = True
+
+        if use_delta and len(active) >= 1:
+            wmean = _exposure_rv_weighted(rv[keep], err[keep])
+            if np.isfinite(wmean):
+                for i in active:
+                    if abs(float(rv[i]) - wmean) > float(max_delta_kms):
+                        keep[i] = False
+                        removed_any = True
+
+        if use_sigma and keep.sum() >= 2:
+            active = np.where(keep)[0]
+            for i in active:
+                others = rv[keep & (np.arange(n) != i)]
+                if len(others) < 1:
+                    continue
+                mu = float(np.mean(others))
+                rms = float(np.std(others, ddof=1)) if len(others) > 1 else 0.0
+                if not np.isfinite(rms) or rms <= 0:
+                    continue
+                if abs(float(rv[i]) - mu) > nsigma * rms:
+                    keep[i] = False
+                    removed_any = True
+
         if not removed_any:
             break
     return keep
@@ -114,6 +135,7 @@ def apply_spectrum_chunk_outlier_clip(
     tab: pd.DataFrame,
     *,
     nsigma: float = 10.0,
+    max_delta_kms: float = 30.0,
 ) -> pd.DataFrame:
     """Mark chunk_kept per spectrum; recompute exposure_rv_kms and residual_kms from kept chunks."""
     if tab.empty:
@@ -127,7 +149,9 @@ def apply_spectrum_chunk_outlier_clip(
         idx = g.index.to_numpy()
         rv = g["rv_kms"].astype(float).to_numpy()
         err = g["rv_err_kms"].astype(float).to_numpy()
-        keep = iterative_loo_sigma_clip_mask(rv, nsigma=nsigma)
+        keep = iterative_spectrum_chunk_clip_mask(
+            rv, err, nsigma=nsigma, max_delta_kms=max_delta_kms
+        )
         out.loc[idx, "chunk_kept"] = keep
         if not np.any(keep):
             continue
@@ -256,6 +280,26 @@ def _object_name(gaia_id: str, summary_dir: Path | None, name_lookup: dict[str, 
     return gaia_id
 
 
+def _clip_title_note(clip_sigma: float | None, clip_max_delta_kms: float | None) -> str:
+    parts = []
+    if clip_sigma is not None and clip_sigma > 0:
+        parts.append(f"{clip_sigma:g}σ LOO")
+    if clip_max_delta_kms is not None and clip_max_delta_kms > 0:
+        parts.append(f"±{clip_max_delta_kms:g} km/s")
+    return f", {' + '.join(parts)} clip" if parts else ""
+
+
+def _clip_legend_label(clip_sigma: float | None, clip_max_delta_kms: float | None) -> str:
+    return "excluded (" + ", ".join(
+        p
+        for p in (
+            f">{clip_sigma:g}σ LOO" if clip_sigma and clip_sigma > 0 else "",
+            f">±{clip_max_delta_kms:g} km/s" if clip_max_delta_kms and clip_max_delta_kms > 0 else "",
+        )
+        if p
+    ) + ")"
+
+
 def _plot_residuals_by_spectrum(
     obj_df: pd.DataFrame,
     *,
@@ -263,6 +307,7 @@ def _plot_residuals_by_spectrum(
     name: str,
     out_path: Path,
     clip_sigma: float | None,
+    clip_max_delta_kms: float | None,
 ) -> None:
     kept_df = obj_df[obj_df["chunk_kept"].astype(bool)] if "chunk_kept" in obj_df.columns else obj_df
     excluded_df = (
@@ -303,15 +348,14 @@ def _plot_residuals_by_spectrum(
             c="0.55",
             alpha=0.45,
             linewidths=0.8,
-            label="excluded (>{}σ LOO)".format(clip_sigma) if clip_sigma else "excluded",
+            label=_clip_legend_label(clip_sigma, clip_max_delta_kms),
         )
     ax.axhline(0.0, color="gray", ls=":", lw=0.8)
     ax.set_xticks(range(len(chunks)))
     ax.set_xticklabels(chunks, rotation=90, fontsize=6)
     ax.set_xlabel("chunk_key")
     ax.set_ylabel("RV_chunk − RV_exposure (km/s)")
-    clip_note = f", {clip_sigma:g}σ LOO clip" if clip_sigma else ""
-    ax.set_title(f"{name} — chunk residuals by spectrum (mask-applicable{clip_note})")
+    ax.set_title(f"{name} — chunk residuals by spectrum (mask-applicable{_clip_title_note(clip_sigma, clip_max_delta_kms)})")
     if n_spec <= 12:
         ax.legend(fontsize=6, loc="upper right", ncol=2)
     fig.tight_layout()
@@ -472,6 +516,7 @@ def run_plot_chunk_residuals(
     summary_dir: Path | None = None,
     gaia_ids: set[str] | None = None,
     chunk_outlier_sigma: float | None = 10.0,
+    chunk_max_delta_kms: float | None = 30.0,
 ) -> dict[str, int]:
     out_dir.mkdir(parents=True, exist_ok=True)
     tab = _load_chunk_rows(diagnostics_glob)
@@ -483,8 +528,16 @@ def run_plot_chunk_residuals(
         tab = tab[tab["gaia_dr3_id"].astype(str).isin(gaia_ids)]
 
     n_excluded = 0
-    if chunk_outlier_sigma is not None and chunk_outlier_sigma > 0:
-        tab = apply_spectrum_chunk_outlier_clip(tab, nsigma=chunk_outlier_sigma)
+    clip_enabled = (
+        (chunk_outlier_sigma is not None and chunk_outlier_sigma > 0)
+        or (chunk_max_delta_kms is not None and chunk_max_delta_kms > 0)
+    )
+    if clip_enabled:
+        tab = apply_spectrum_chunk_outlier_clip(
+            tab,
+            nsigma=float(chunk_outlier_sigma or 0.0),
+            max_delta_kms=float(chunk_max_delta_kms or 0.0),
+        )
         n_excluded = int((~tab["chunk_kept"].astype(bool)).sum())
         tab_plot = tab[tab["chunk_kept"].astype(bool)].copy()
     else:
@@ -510,6 +563,7 @@ def run_plot_chunk_residuals(
             name=name,
             out_path=obj_dir / f"{name or gid}_residuals_by_spectrum.png",
             clip_sigma=chunk_outlier_sigma,
+            clip_max_delta_kms=chunk_max_delta_kms,
         )
 
         summary = _summarize_chunks_per_object(obj_df)
@@ -523,7 +577,7 @@ def run_plot_chunk_residuals(
             out_path=obj_dir / f"{name or gid}_chunk_weighted_mean.png",
             title_suffix=(
                 "per-chunk weighted mean across spectra"
-                + (f" ({chunk_outlier_sigma:g}σ LOO clip)" if chunk_outlier_sigma else "")
+                + _clip_title_note(chunk_outlier_sigma, chunk_max_delta_kms)
             ),
         )
         n_objects += 1
@@ -573,6 +627,12 @@ def main() -> None:
         default=10.0,
         help="Iterative leave-one-out clip: exclude chunk RVs > N×RMS(other chunks) per spectrum (0=off)",
     )
+    ap.add_argument(
+        "--chunk-max-delta-kms",
+        type=float,
+        default=30.0,
+        help="Iterative clip: exclude chunk RVs > N km/s from weighted mean per spectrum (0=off)",
+    )
     ap.add_argument("--log-level", default="INFO")
     args = ap.parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
@@ -586,12 +646,14 @@ def main() -> None:
             logger.warning("overlap_stars.csv not found; using all mask-applicable objects")
 
     clip_sigma = float(args.chunk_outlier_sigma) if args.chunk_outlier_sigma > 0 else None
+    clip_delta = float(args.chunk_max_delta_kms) if args.chunk_max_delta_kms > 0 else None
     stats = run_plot_chunk_residuals(
         diagnostics_glob=args.diagnostics_glob,
         out_dir=args.out_dir,
         summary_dir=args.summary_dir,
         gaia_ids=gaia_ids,
         chunk_outlier_sigma=clip_sigma,
+        chunk_max_delta_kms=clip_delta,
     )
     logger.info("Wrote chunk residual plots to %s (%s)", args.out_dir, stats)
 

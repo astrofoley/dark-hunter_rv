@@ -10,7 +10,7 @@ from validation.plot_chunk_residuals import (
     _summarize_chunks_per_object,
     _weighted_mean_and_errors,
     apply_spectrum_chunk_outlier_clip,
-    iterative_loo_sigma_clip_mask,
+    iterative_spectrum_chunk_clip_mask,
 )
 
 
@@ -33,11 +33,20 @@ def test_weighted_mean_and_errors() -> None:
     assert intrinsic >= 0
 
 
-def test_iterative_loo_sigma_clip_removes_outlier() -> None:
+def test_iterative_clip_removes_sigma_outlier() -> None:
     rv = np.array([10.0, 10.1, 10.05, 50.0])
-    keep = iterative_loo_sigma_clip_mask(rv, nsigma=10.0)
+    err = np.array([0.05, 0.05, 0.05, 0.05])
+    keep = iterative_spectrum_chunk_clip_mask(rv, err, nsigma=10.0, max_delta_kms=0.0)
     assert not keep[3]
     assert keep[:3].all()
+
+
+def test_iterative_clip_removes_far_from_weighted_mean() -> None:
+    rv = np.array([10.0, 10.1, 80.0])
+    err = np.array([0.05, 0.05, 0.05])
+    keep = iterative_spectrum_chunk_clip_mask(rv, err, nsigma=0.0, max_delta_kms=30.0)
+    assert not keep[2]
+    assert keep[:2].all()
 
 
 def test_apply_spectrum_chunk_outlier_clip() -> None:
