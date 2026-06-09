@@ -78,6 +78,24 @@ Use **`--include-offset-calibration`** to force reprocessing of offset-training 
 3. Install `bias_statistics.txt` next to `InstrumentProfile.bias_file` (APF: repo root).
 4. Offsets: `python -m validation.compute_method_rv_offsets --diagnostics-list … --output method_rv_offsets.txt`
 
+## Production RV refit (full catalog, parallel)
+
+Re-measure every star with `subchunks_4` + debias, Keplerian fit, and **per-star website update** (plots, summary, `data.csv` row). Low CPU priority; parallel workers use `flock` on `data.csv`.
+
+```bash
+cd /data2/darkhunter/dark-hunter_rv
+git pull
+
+screen -dmS darkhunter_parallel_refit bash -lc '
+  REPO=/data2/darkhunter/dark-hunter_rv
+  cd "$REPO"
+  JOBS=4 NICE_LEVEL=10 PIPELINE_FORCE=1 FIT_FORCE=1 FIT_JITTER=1 \
+    bash scripts/refit_all_per_object_parallel.sh
+'
+```
+
+Attach with `screen -r darkhunter_parallel_refit`. Logs: `logs/refit_all_per_object_parallel.log` and `logs/refit_parallel/<gaia_id>.log`. Tune `JOBS` (default half of CPU count, max 8) and `NICE_LEVEL` (default 10).
+
 ## Production RV refit (one star: re-measure + Keplerian fit)
 
 Re-run the pipeline with the **production chunk layout** (`subchunks_4`), **committed debias table**, and mask-CCF summary RVs, then fit:

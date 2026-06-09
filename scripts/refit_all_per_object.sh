@@ -9,10 +9,18 @@
 #   STAR_ID=1551542027851147904 bash scripts/refit_all_per_object.sh
 #   MIN_POINTS=5 FIT_FORCE=1 bash scripts/refit_all_per_object.sh
 #
-# Detached (recommended for full catalog):
+# Detached sequential (one star at a time):
 #   screen -dmS darkhunter_per_object bash -lc '
 #     REPO=/data2/darkhunter/dark-hunter_rv
-#     cd "$REPO" && git pull && bash scripts/refit_all_per_object.sh
+#     cd "$REPO" && PIPELINE_FORCE=1 bash scripts/refit_all_per_object.sh
+#   '
+#
+# Detached parallel (recommended for full catalog refit):
+#   screen -dmS darkhunter_parallel_refit bash -lc '
+#     REPO=/data2/darkhunter/dark-hunter_rv
+#     cd "$REPO"
+#     JOBS=4 NICE_LEVEL=10 PIPELINE_FORCE=1 FIT_FORCE=1 FIT_JITTER=1 \
+#       bash scripts/refit_all_per_object_parallel.sh
 #   '
 
 set -euo pipefail
@@ -46,17 +54,14 @@ cd "$REPO"
 source "$REPO/scripts/lib/spec_find_patterns.sh"
 # shellcheck source=scripts/lib/discover_gaia_star_ids.sh
 source "$REPO/scripts/lib/discover_gaia_star_ids.sh"
-# shellcheck source=scripts/lib/website_sync_one_star.sh
-source "$REPO/scripts/lib/website_sync_one_star.sh"
-
 mkdir -p "$(dirname "$LOG")" "$OUT" "$REPO/logs" "$REPORTS_DIR"
 export PYTHONPATH="$REPO"
 export DARKHUNTER_OUTPUT_DIR="$OUT"
 export WEB_ROOT OUT SPEC_ROOT REPORTS_DIR PY MIN_POINTS
 export WEBSITE_STARS_DIR="$WEB_ROOT/stars"
 export DATA_CSV="$WEB_ROOT/tables/data.csv"
-
-run_cmd() { "$@"; }
+export CHUNK_LAYOUT PIPELINE_FORCE MASK_PRIMARY FIT_FORCE FIT_JITTER
+export PIPELINE_UPDATE RUN_HBETA QUERY_GAIA_ONLINE
 
 if [[ ! -f "$DATA_CSV" ]]; then
   echo "[ERROR] $DATA_CSV missing — run scripts/bootstrap_website_tables.sh first." >&2
@@ -81,83 +86,21 @@ if [[ "${#STAR_IDS[@]}" -eq 0 ]]; then
 fi
 echo "stars_to_process=${#STAR_IDS[@]}"
 
-pipeline_args=(--instrument APF --plots --plots-focus)
-if [[ -f "$CHUNK_LAYOUT" ]]; then
-  pipeline_args+=(--chunk-layout "$CHUNK_LAYOUT")
-fi
-if [[ "$PIPELINE_FORCE" == "1" ]]; then
-  pipeline_args+=(--force)
-elif [[ "$PIPELINE_UPDATE" == "1" ]]; then
-  pipeline_args+=(--update)
-fi
-if [[ "$MASK_PRIMARY" == "1" ]]; then
-  pipeline_args+=(--no-run-all-methods)
-fi
+export REFIT_PARALLEL_LOG_DIR="$REPO/logs/refit_per_object"
 if [[ ! -f "$REPO/bias_statistics.txt" ]]; then
   echo "[WARN] $REPO/bias_statistics.txt missing — mask RVs will not be debiased" >&2
 fi
+mkdir -p "$REFIT_PARALLEL_LOG_DIR"
+worker="$REPO/scripts/lib/refit_one_object.sh"
+chmod +x "$worker"
 
 n_ok=0
 n_skip=0
 for gid in "${STAR_IDS[@]}"; do
   echo ""
-  echo "=== Gaia_DR3_${gid} ($(date -Is)) ==="
-
-  mapfile -d '' -t SPEC_FILES < <(
-    find "$SPEC_ROOT" -type f \( \
-      -name "Gaia_DR3_${gid}_epoch_*.txt" -o \
-      -name "Gaia_DR3_${gid}_*_ap1.flm" -o \
-      -name "Gaia_DR3_${gid}_*_ap1.txt" \
-    \) -print0 2>/dev/null
-  )
-  if [[ "${#SPEC_FILES[@]}" -eq 0 ]]; then
-    echo "[WARN] no spectra files for Gaia_DR3_${gid}; skip"
-    n_skip=$((n_skip + 1))
-    continue
-  fi
-  echo "pipeline: ${#SPEC_FILES[@]} spectrum file(s)"
-  printf '%s\0' "${SPEC_FILES[@]}" | xargs -0 -r "$PY" -m darkhunter_rv.pipeline "${pipeline_args[@]}" \
-    || echo "[WARN] pipeline errors for Gaia_DR3_${gid} (continuing)"
-
-  summ="$OUT/Gaia_DR3_${gid}_summary.txt"
-  if [[ ! -f "$summ" ]]; then
-    echo "[WARN] no summary after pipeline; skip fit/website"
-    n_skip=$((n_skip + 1))
-    continue
-  fi
-
-  fit_args=(
-    fit_apf_rv_keplerian.py
-    --summary "$summ"
-    --output-dir "$OUT"
-    --reports-dir "$REPORTS_DIR"
-    --use-gaia-nss
-    --min-points "$MIN_POINTS"
-    --data-csv "$DATA_CSV"
-  )
-  if [[ "$FIT_FORCE" == "1" ]]; then
-    fit_args+=(--force)
-  fi
-  if [[ "$QUERY_GAIA_ONLINE" == "1" ]]; then
-    fit_args+=(--query-gaia-online)
-  fi
-  if [[ "$FIT_JITTER" == "1" ]]; then
-    fit_args+=(--fit-jitter)
-  fi
-  "$PY" "${fit_args[@]}" || echo "[WARN] fit failed for Gaia_DR3_${gid} (continuing)"
-
-  if [[ "$RUN_HBETA" == "1" ]]; then
-    "$PY" scripts/build_hbeta_website_plots.py \
-      --summary-dir "$OUT" \
-      --plots-root "$OUT" \
-      --spec-root "$SPEC_ROOT" \
-      --star-id "$gid" \
-      || echo "[WARN] Hβ plot failed for Gaia_DR3_${gid} (continuing)"
-  fi
-
-  if website_sync_one_star "$gid"; then
+  echo "=== Gaia_DR3_${gid} ($(date '+%Y-%m-%dT%H:%M:%S%z')) ==="
+  if bash "$worker" "$gid"; then
     n_ok=$((n_ok + 1))
-    echo "[OK] website updated for Gaia_DR3_${gid}"
   else
     n_skip=$((n_skip + 1))
   fi
