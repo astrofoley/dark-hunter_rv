@@ -1,0 +1,4 @@
+name: subchunks_4
+subchunks: 4
+min_pixels: 5
+# Requires pipeline rerun: --subchunks 4

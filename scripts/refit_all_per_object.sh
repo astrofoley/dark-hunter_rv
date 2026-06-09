@@ -25,6 +25,7 @@ PY="${PY:-/home/marley/anaconda2/envs/gaia-env/bin/python}"
 REPORTS_DIR="${REPORTS_DIR:-$REPO/rv_fit_reports}"
 MIN_POINTS="${MIN_POINTS:-5}"
 FIT_FORCE="${FIT_FORCE:-1}"
+FIT_JITTER="${FIT_JITTER:-1}"
 PIPELINE_UPDATE="${PIPELINE_UPDATE:-0}"
 RUN_HBETA="${RUN_HBETA:-1}"
 QUERY_GAIA_ONLINE="${QUERY_GAIA_ONLINE:-0}"
@@ -119,6 +120,9 @@ for gid in "${STAR_IDS[@]}"; do
   fi
   if [[ "$QUERY_GAIA_ONLINE" == "1" ]]; then
     fit_args+=(--query-gaia-online)
+  fi
+  if [[ "$FIT_JITTER" == "1" ]]; then
+    fit_args+=(--fit-jitter)
   fi
   "$PY" "${fit_args[@]}" || echo "[WARN] fit failed for Gaia_DR3_${gid} (continuing)"
 

@@ -1,0 +1,4 @@
+name: whole_order
+subchunks: 1
+pixel_edges: [0.0, 1.0]
+min_pixels: 5

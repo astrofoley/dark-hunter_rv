@@ -5,6 +5,7 @@ import numpy as np
 from darkhunter_rv import config
 from darkhunter_rv.pipeline import (
     _mask_ccf_stack_error_inflated,
+    _weighted_rms,
     _weighted_method_rv_from_rows,
     _weighted_template_fft_for_order,
 )
@@ -73,6 +74,17 @@ def test_mask_ccf_inflates_combined_err_when_chunks_disagree():
     assert er > 0.4, f"expected inflation above formal IVAR error, got er={er}"
 
 
+def test_weighted_rms_differs_from_unweighted_when_errors_differ():
+    rv = np.array([10.0, 13.0, 12.0], float)
+    er = np.array([0.01, 1.0, 0.01], float)
+    w = 1.0 / (er**2 + 1e-9)
+    mu = float(np.average(rv, weights=w))
+    wrms = _weighted_rms(rv, er, mu_weighted=mu)
+    urms = float(np.std(rv))
+    assert wrms < urms
+    assert np.isclose(wrms, float(np.sqrt(np.average((rv - mu) ** 2, weights=w))))
+
+
 def test_mask_ccf_stack_inflation_helper():
     rv = np.array([10.0, 14.0, 12.0], float)
     er = np.array([0.01, 0.01, 0.01], float)
@@ -81,7 +93,7 @@ def test_mask_ccf_stack_inflation_helper():
     formal = float(np.sqrt(1.0 / np.sum(1.0 / (er**2))))
     out = _mask_ccf_stack_error_inflated(rv, er, formal, mu_weighted=mu)
     assert out > formal * 5.0
-    rms_term = float(np.sqrt(np.mean((rv - mu) ** 2)) / np.sqrt(len(rv)))
+    rms_term = _weighted_rms(rv, er, mu_weighted=mu) / np.sqrt(len(rv))
     assert out >= rms_term - 1e-9
 
 

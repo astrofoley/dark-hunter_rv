@@ -29,6 +29,19 @@
   - Per-spectrum clip (default): 7σ LOO + ±20 km/s (`--chunk-outlier-sigma 7`, `--chunk-max-delta-kms 20`).
   - Per-object weighted mean: only chunks with ≥3 surviving measurements (`--min-chunk-measurements 3`).
   - Full-sample clip on per-object chunk biases (default): 5σ LOO + ±10 km/s (`--sample-outlier-sigma 5`, `--sample-max-delta-kms 10`). Excluded points shown as gray ×.
+- **Apply chunk calibration + relative reassessment:**
+  - `python -m validation.reassess_relative_calibration --diagnostics-glob 'output/Gaia_DR3_*_diagnostics.csv' --bias-csv validation_output/chunk_residuals/per_object_chunk_bias.csv --out-dir validation_output/chunk_calibration_assessment`
+- **Chunk bias regression (stellar params + bias curve):**
+  - `python -m validation.chunk_bias_regression --bias-csv validation_output/chunk_residuals/per_object_chunk_bias.csv --summary-dir output --out-dir validation_output/chunk_bias_regression --reassess-relative-gate`
+  - Outputs: `regression_adjusted_chunk_bias.csv`, `regression_chunk_bias_for_calibration.csv`, `CHUNK_OPTIMIZATION_ADVICE.md`
+- **Evaluate chunk layouts (offline merge / compare N+1 edges):**
+  - `python -m validation.evaluate_chunk_layout --layouts calibration/chunk_layouts/*.yaml --diagnostics-glob 'output/Gaia_DR3_*_diagnostics.csv' --out-dir validation_output/chunk_layout_eval`
+  - Sub-chunk layouts require pipeline rerun with `--subchunks N` before bias loop.
+- **Parametric grid search (rough N: subchunks 1,2,4 + merge widths 1,2,4):**
+  - `python -m validation.chunk_grid_search --diagnostics-glob 'output/Gaia_DR3_*_diagnostics.csv' --out-dir validation_output/chunk_grid_search`
+- **Full chunk campaign (pipeline + cache + edge presets + stages B/C):**
+  - `python -m validation.chunk_campaign --run-pipeline --out-dir validation_output/chunk_campaign`
+  - Uses `measurement_cache.csv` to avoid re-measuring identical chunks; per-layout diagnostics under `validation_output/chunk_campaign/diagnostics/<layout>/`
 - Error model calibration:
   - `python3 validation/calibrate_error_model.py --diag-glob "output/*_diagnostics.csv" --out-dir validation_output/error_model`
 - Full campaign report:

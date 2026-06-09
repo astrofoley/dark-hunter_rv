@@ -160,6 +160,43 @@ def test_fit_keplerian_clips_initial_guess() -> None:
     assert np.all(np.isfinite(params))
 
 
+def test_effective_yerr_uses_formal_error_and_jitter() -> None:
+    pts = [
+        fitmod.RVPoint(mjd=1.0, rv=0.0, rv_err=0.1, rms=0.9, file="a", telescope="APF"),
+        fitmod.RVPoint(mjd=2.0, rv=1.0, rv_err=0.2, rms=0.8, file="b", telescope="APF"),
+    ]
+    yerr = fitmod.effective_yerr_for_points(pts)
+    assert np.allclose(yerr, [0.1, 0.2])
+    yerr_j = fitmod.effective_yerr_for_points(pts, {"jitter_kms": 0.3})
+    assert np.allclose(yerr_j, np.sqrt(np.array([0.1, 0.2]) ** 2 + 0.3**2))
+
+
+def test_profile_jitter_stays_small_when_orbit_matches() -> None:
+    t = np.linspace(60000.0, 60120.0, 16)
+    params = np.array([np.log(101.0), 24.0, 0.1, 0.0, 0.2, 10.0])
+    y = fitmod.rv_model(params, t, float(np.median(t)))
+    yerr = np.full_like(t, 0.03)
+    jit = fitmod._profile_jitter_kms(y, y, yerr)
+    assert jit < 0.5
+
+
+def test_fit_keplerian_fit_jitter_recovers_extra_scatter() -> None:
+    rng = np.random.default_rng(42)
+    t = np.linspace(60000.0, 60120.0, 12)
+    p_true = 15.0
+    params = np.array([np.log(p_true), 4.0, 0.1, 0.0, 0.2, -12.0])
+    y = fitmod.rv_model(params, t, float(np.median(t)))
+    y += rng.normal(0.0, 0.35, size=t.size)
+    yerr = np.full_like(t, 0.05)
+    _, rep_no_jit = fitmod.fit_keplerian(t, y, yerr, period_min=10.0, period_max=20.0)
+    _, rep_jit = fitmod.fit_keplerian(
+        t, y, yerr, period_min=10.0, period_max=20.0, fit_jitter=True
+    )
+    assert rep_no_jit["chi2_red"] > rep_jit["chi2_red"]
+    assert rep_jit["jitter_kms"] > 0.05
+    assert rep_jit["fit_jitter"] is True
+
+
 def test_parse_summary_excludes_legacy_sentinel_rv(tmp_path: Path) -> None:
     summ = tmp_path / "Gaia_DR3_958479989998172288_summary.txt"
     summ.write_text(
