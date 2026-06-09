@@ -1,0 +1,4 @@
+reference_key,reference_title,reference_arxiv,reference_url,reference_table,obs_index,gaia_dr3_id,name,bjd,rv_kms,rv_err_kms,instrument,spectral_resolution_R,snr_per_pixel,P_orb_days,P_orb_err,M_star_msun,M_star_err,M2_msun,M2_err,eccentricity,eccentricity_err,parallax_mas,parallax_err_mas,G_mag,N_rvs_table1
+TestRef,Test paper,,,,1,1000000000000000001,STAR_A,2459900.0,10.0,0.1,APF,,,,,,,,,,,,,,
+TestRef,Test paper,,,,2,1000000000000000001,STAR_A,2459903.0,10.5,0.1,APF,,,,,,,,,,,,,,
+TestRef,Test paper,,,,1,1000000000000000002,STAR_B,2459800.0,20.0,0.2,HIRES,,,,,,,,,,,,,,

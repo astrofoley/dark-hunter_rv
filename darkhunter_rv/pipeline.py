@@ -102,6 +102,25 @@ def _rv_kms_from_hb_joint_line_center(bundle: dict) -> float:
     return float(config.C_KMS * (ctr - rv_core.HB_REST_A) / rv_core.HB_REST_A)
 
 
+def _weighted_rms(
+    rv: np.ndarray,
+    er: np.ndarray,
+    *,
+    mu_weighted: float | None = None,
+) -> float:
+    """Inverse-variance weighted RMS of chunk RVs about the weighted mean."""
+    rv = np.asarray(rv, float).ravel()
+    er = np.asarray(er, float).ravel()
+    n = int(rv.size)
+    if n == 0:
+        return float("nan")
+    if n == 1:
+        return 0.0
+    w = 1.0 / (er**2 + 1e-9)
+    mu = float(mu_weighted) if mu_weighted is not None else float(np.average(rv, weights=w))
+    return float(np.sqrt(np.average((rv - mu) ** 2, weights=w)))
+
+
 def _mask_ccf_stack_error_inflated(
     rv: np.ndarray,
     er: np.ndarray,
@@ -112,7 +131,7 @@ def _mask_ccf_stack_error_inflated(
     """
     Inverse-variance formal error can be far too small when a few chunks have optimistic Gaussian
     ``sigma_mu`` (broad/noisy lines) while chunk RVs disagree. Floor the combined error using spread
-    of the chunk RVs: MAD and std-based terms, plus **RMS of residuals about the weighted mean**
+    of the chunk RVs: MAD and std-based terms, plus **weighted RMS of residuals about the weighted mean**
     divided by ``sqrt(N_orders)`` (chunk count), as requested for exposure-level mask stacks.
     """
     rv = np.asarray(rv, float).ravel()
@@ -122,7 +141,7 @@ def _mask_ccf_stack_error_inflated(
     if n < 2 or er.size != n:
         return formal
     mu = float(mu_weighted)
-    resid_rms = float(np.sqrt(np.mean((rv - mu) ** 2)))
+    resid_rms = _weighted_rms(rv, er, mu_weighted=mu)
     from_rms = resid_rms / np.sqrt(n)
     med = float(np.median(rv))
     mad = float(np.median(np.abs(rv - med))) * 1.4826
@@ -679,7 +698,15 @@ def process_spectrum(
     )
 
     chunk_preps: list[dict] = []
-    for chunk_key, w, f, e in chunking.iter_order_chunks(spec_data, instrument.bad_orders, args.subchunks):
+    chunk_layout_path = getattr(args, "chunk_layout", None)
+    if chunk_layout_path:
+        from validation.chunk_layout import load_chunk_layout, iter_order_chunks_from_layout
+
+        layout = load_chunk_layout(chunk_layout_path)
+        chunk_iter = iter_order_chunks_from_layout(spec_data, instrument.bad_orders, layout)
+    else:
+        chunk_iter = chunking.iter_order_chunks(spec_data, instrument.bad_orders, args.subchunks)
+    for chunk_key, w, f, e in chunk_iter:
         if len(w) < 10:
             continue
         try:
@@ -711,7 +738,8 @@ def process_spectrum(
         nw, nf, ne = prep["nw"], prep["nf"], prep["ne"]
         line_obs = rv_core.mask_line_flux_in_excluded_wavelengths(nw, 1.0 - nf)
 
-        bvec = bias.get(int(str(chunk_key).split("_")[0]), [0.0, 0.0, 0.0])
+        b_order = chunking.bias_order_from_chunk_key(chunk_key)
+        bvec = bias.get(b_order, [0.0, 0.0, 0.0]) if b_order is not None else [0.0, 0.0, 0.0]
 
         tell_frac = qc.telluric_fraction(nw)
         mask_line_count = qc.mask_line_count_in_chunk(nw, mw if "mw" in locals() else None)
@@ -751,7 +779,7 @@ def process_spectrum(
             rv_m -= b0
             err_m = float(np.sqrt(err_m**2 + b1**2 + b2**2)) if np.isfinite(err_m) else err_m
             gauss_ok_m = np.isfinite(err_m) and err_m < 1e29
-            ord_num = int(str(chunk_key).split("_")[0])
+            _, ord_num, _ = chunking.parse_chunk_key(chunk_key)
             if vels_m is not None and ccf_m is not None and ord_num not in order_mask_ccf:
                 peak_for_plot = float(rv_m) if np.isfinite(rv_m) else float("nan")
                 if gauss_plot_ccf is not None:
@@ -1043,7 +1071,8 @@ def process_spectrum(
                 continue
             rv_ord = None
             for ck, rec in rv_results.items():
-                if int(str(ck).split("_")[0]) == int(o):
+                o_ck, _, _ = chunking.parse_chunk_key(ck)
+                if o_ck is not None and int(o_ck) == int(o):
                     rv_ord = float(rec["best_rv"])
                     break
             plotting.plot_order_strong_line_panels(
@@ -1081,7 +1110,7 @@ def process_spectrum(
             wts = 1.0 / (err_arr**2 + 1e-9)
             mean_rv = float(np.average(rv_arr, weights=wts))
             mean_err = float(np.sqrt(1.0 / np.sum(wts)))
-            rms = float(np.std(rv_arr))
+            rms = _weighted_rms(rv_arr, err_arr, mu_weighted=mean_rv)
 
             mask_only = len(meth_arr) > 0 and all(str(m) == "mask_ccf" for m in meth_arr.tolist())
             if (not use_fft_primary) and mask_only:
@@ -1127,7 +1156,7 @@ def process_spectrum(
             )
 
     if plot_root and len(rv_arr) > 0 and len(keys_arr) == len(rv_arr) and not plots_skip_order_summary:
-        ord_nums = np.array([int(str(k).split("_")[0]) for k in keys_arr], dtype=float)
+        ord_nums = np.array([chunking.parse_chunk_key(str(k))[1] for k in keys_arr], dtype=float)
         plotting.plot_rv_vs_order(
             ord_nums,
             rv_arr,
@@ -1389,7 +1418,11 @@ def process_spectrum(
 
     # Fill residual/scatter diagnostics + exposure stack metadata
     if diagnostics_rows:
-        chunk_scatter = float(np.std(rv_arr)) if len(rv_arr) > 1 else (0.0 if len(rv_arr) == 1 else np.nan)
+        chunk_scatter = (
+            _weighted_rms(rv_arr, err_arr, mu_weighted=float(mean_rv))
+            if len(rv_arr) > 1
+            else (0.0 if len(rv_arr) == 1 else np.nan)
+        )
         for row in diagnostics_rows:
             ck = str(row.get("chunk_key", ""))
             meth = str(row.get("method", ""))
@@ -1523,6 +1556,12 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--continuum-mode", choices=["spline", "blaze"], default="spline")
     parser.add_argument("--subchunks", type=int, default=1, help="Split each order into N pixel chunks")
+    parser.add_argument(
+        "--chunk-layout",
+        type=Path,
+        default=None,
+        help="YAML chunk layout (overrides --subchunks when set). See validation/chunk_layout.py.",
+    )
     parser.add_argument("--max-chunk-err", type=float, default=50.0, help="Skip chunk RVs with err > this (km/s)")
     parser.add_argument("--qc-config", default="order_chunk_qc.yaml", help="QC threshold YAML")
     parser.add_argument("--write-qc-config", action="store_true", help="Write default QC config if missing")

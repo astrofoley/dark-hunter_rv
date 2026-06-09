@@ -7,7 +7,7 @@ import pandas as pd
 import astropy.io.fits as fits
 from astropy.time import Time
 from pathlib import Path
-from . import config
+from . import chunking, config
 
 def extract_mjd_from_header(header, instrument=None):
     if instrument is not None and hasattr(instrument, "header_keywords"):
@@ -212,10 +212,7 @@ def write_order_results(order_data, input_filename):
     outfile = config.OUTPUT_DIR / f"{base}_orders.txt"
     with open(outfile, "w") as f:
         f.write("# Order | RV (km/s) | RV Error (km/s)\n")
-        def _sort_key(k):
-            parts = str(k).split("_")
-            return tuple(int(x) for x in parts)
-        for order in sorted(order_data.keys(), key=_sort_key):
+        for order in sorted(order_data.keys(), key=chunking.chunk_sort_key):
             d = order_data[order]
             rv = f"{d['best_rv']:.8f}" if np.isfinite(d['best_rv']) else "NaN"
             err = f"{d['best_rv_err']:.8f}" if np.isfinite(d['best_rv_err']) else "NaN"
@@ -340,7 +337,7 @@ def write_star_summary(obj_id, gaia_data, pipeline_results):
 
         # 3. Pipeline Data (merged across per-spectrum pipeline runs)
         f.write("\n[PIPELINE RESULTS]\n")
-        f.write("# File | MJD | RV (km/s) | Err (km/s) | RMS | Fallback?\n")
+        f.write("# File | MJD | RV (km/s) | Err (km/s) | wRMS (km/s) | Fallback?\n")
         for bn in ordered:
             f.write(merged[bn] + "\n")
 

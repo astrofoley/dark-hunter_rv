@@ -1,0 +1,10 @@
+# Phase A acceptance thresholds (frozen for regression).
+# Compare future runs via validation.rv_phase_a_baseline → baseline_manifest.json
+
+pair_window_days: 7.0
+
+# Absolute calibration: APF vs literature (external zero-point)
+absolute_gate_kms: 1.0
+
+# Relative calibration: APF vs APF repeatability (precision target after debias)
+relative_goal_kms: 0.1

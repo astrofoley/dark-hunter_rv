@@ -28,7 +28,7 @@ import time
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from astropy.timeseries import LombScargle
@@ -41,7 +41,7 @@ from darkhunter_rv.summary_paths import (
     parse_object_id_from_summary,
 )
 from darkhunter_rv.thiele_innes_inclination import fill_inclination_in_metadata, inclination_from_row_dict
-from scipy.optimize import least_squares
+from scipy.optimize import least_squares, minimize_scalar
 import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
 from matplotlib.offsetbox import AnnotationBbox, TextArea, VPacker, HPacker
@@ -636,6 +636,68 @@ def _clip_initial_guess(x0: np.ndarray, lower: np.ndarray, upper: np.ndarray) ->
     return np.minimum(np.maximum(x, lower), upper)
 
 
+def _effective_sigma(
+    yerr: np.ndarray,
+    *,
+    log_jitter: Optional[float] = None,
+    jitter_kms: Optional[float] = None,
+) -> np.ndarray:
+    """Per-epoch σ_tot = sqrt(σ_formal² + σ_jitter²) for fitting and plots."""
+    base = np.clip(np.asarray(yerr, dtype=float), 1e-4, None)
+    if jitter_kms is not None and np.isfinite(jitter_kms) and float(jitter_kms) > 0:
+        return np.sqrt(base**2 + float(jitter_kms) ** 2)
+    if log_jitter is not None and np.isfinite(log_jitter):
+        jit = float(np.exp(log_jitter))
+        return np.sqrt(base**2 + jit**2)
+    return base
+
+
+def _profile_jitter_kms(
+    y: np.ndarray,
+    model: np.ndarray,
+    yerr: np.ndarray,
+    *,
+    s_max_kms: float = 10.0,
+) -> float:
+    """
+    Homoscedastic intrinsic jitter (km/s) at a fixed orbit.
+
+    Profiled by minimizing the Gaussian negative log-likelihood
+    (includes log-σ terms so σ_jit cannot be inflated without penalty).
+    """
+    y = np.asarray(y, dtype=float).ravel()
+    model = np.asarray(model, dtype=float).ravel()
+    yerr = np.asarray(yerr, dtype=float).ravel()
+    resid2 = (y - model) ** 2
+    e2 = np.clip(yerr, 1e-4, None) ** 2
+
+    def nll(log_s: float) -> float:
+        s2 = float(np.exp(2.0 * log_s))
+        sig2 = e2 + s2
+        return float(np.sum(resid2 / sig2 + np.log(sig2)))
+
+    res = minimize_scalar(
+        nll,
+        bounds=(np.log(1e-4), np.log(max(1e-4, float(s_max_kms)))),
+        method="bounded",
+    )
+    return float(np.exp(res.x))
+
+
+def effective_yerr_for_points(
+    points: Sequence["RVPoint"],
+    report: Optional[dict] = None,
+) -> np.ndarray:
+    """Formal RV errors used in the fit, plus fitted/fixed jitter in quadrature."""
+    yerr = np.array([p.rv_err for p in points], dtype=float)
+    if report is None:
+        return yerr
+    jit = report.get("jitter_kms")
+    if jit is not None and np.isfinite(jit) and float(jit) > 0:
+        yerr = _effective_sigma(yerr, jitter_kms=float(jit))
+    return yerr
+
+
 def _sanitize_rv_arrays(
     t: np.ndarray,
     y: np.ndarray,
@@ -678,6 +740,9 @@ def fit_keplerian(
     fix_period: Optional[float] = None,
     fix_e: Optional[float] = None,
     initial_params: Optional[np.ndarray] = None,
+    *,
+    fit_jitter: bool = False,
+    jitter_kms: Optional[float] = None,
 ) -> Tuple[np.ndarray, dict]:
     t = np.asarray(t, dtype=float)
     y = np.asarray(y, dtype=float)
@@ -688,6 +753,11 @@ def fit_keplerian(
         raise ValueError("non-finite MJD or RV after sanitization")
     if not np.all(np.isfinite(yerr)) or np.any(yerr <= 0):
         raise ValueError("non-finite or non-positive RV errors after sanitization")
+    if fit_jitter and jitter_kms is not None and np.isfinite(jitter_kms) and float(jitter_kms) > 0:
+        raise ValueError("use either fit_jitter or jitter_kms, not both")
+    fixed_jitter: Optional[float] = None
+    if jitter_kms is not None and np.isfinite(jitter_kms) and float(jitter_kms) > 0:
+        fixed_jitter = float(jitter_kms)
 
     span = max(float(np.max(t) - np.min(t)), 1.0)
     dt = np.diff(np.sort(t))
@@ -738,11 +808,13 @@ def fit_keplerian(
 
     lower = np.array([np.log(min_period), 0.0, -0.95, -0.95, -np.pi, -1000.0])
     upper = np.array([np.log(max_period), 1000.0, 0.95, 0.95, np.pi, 1000.0])
+    jitter_hold = float(fixed_jitter or 0.0)
 
     def resid(p):
-        p_eff = _project_params_to_fixed_e(p, fix_e)
-        model = rv_model(p_eff, t, t_ref)
-        r = (y - model) / np.clip(yerr, 1e-4, None)
+        p_orb = _project_params_to_fixed_e(p, fix_e)
+        model = rv_model(p_orb, t, t_ref)
+        sig = _effective_sigma(yerr, jitter_kms=jitter_hold if jitter_hold > 0 else None)
+        r = (y - model) / sig
         if fix_period is not None:
             # Hold P effectively fixed by adding a very strong prior.
             r = np.concatenate([r, np.array([(p[0] - np.log(fix_period)) / 1e-6])])
@@ -766,15 +838,13 @@ def fit_keplerian(
             seen.add(key)
             uniq_periods.append(key)
 
-    best_res = None
-    best_cost = np.inf
     f_scale = float(np.median(yerr))
     if not np.isfinite(f_scale) or f_scale <= 0:
         f_scale = 1.0
 
     x0_candidates: List[np.ndarray] = []
     if initial_params is not None:
-        seed = _clip_initial_guess(np.asarray(initial_params, dtype=float), lower, upper)
+        seed = _clip_initial_guess(np.asarray(initial_params, dtype=float).ravel()[:6], lower, upper)
         if fix_period is not None:
             seed[0] = np.log(float(np.clip(fix_period, min_period, max_period)))
         x0_candidates.append(seed)
@@ -797,31 +867,52 @@ def fit_keplerian(
         )
         x0_candidates.append(x0)
 
-    seen_x0: set = set()
-    for x0 in x0_candidates:
-        key = tuple(np.round(x0, 5))
-        if key in seen_x0:
-            continue
-        seen_x0.add(key)
-        try:
-            res = least_squares(
-                resid,
-                x0=x0,
-                bounds=(lower, upper),
-                loss="soft_l1",
-                f_scale=f_scale,
-                max_nfev=8000,
-            )
-        except ValueError:
-            continue
-        if res.cost < best_cost:
-            best_cost = res.cost
-            best_res = res
+    def _run_multi_start(candidates: List[np.ndarray]):
+        best_res = None
+        best_cost = np.inf
+        seen_x0: set = set()
+        for x0 in candidates:
+            key = tuple(np.round(x0, 5))
+            if key in seen_x0:
+                continue
+            seen_x0.add(key)
+            try:
+                trial = least_squares(
+                    resid,
+                    x0=x0,
+                    bounds=(lower, upper),
+                    loss="soft_l1",
+                    f_scale=f_scale,
+                    max_nfev=8000,
+                )
+            except ValueError:
+                continue
+            if trial.cost < best_cost:
+                best_cost = trial.cost
+                best_res = trial
+        return best_res
 
-    if best_res is None:
-        raise RuntimeError("Keplerian fit failed: no optimization result.")
+    if fit_jitter:
+        jitter_hold = 0.0
+        warm_x0: List[np.ndarray] = list(x0_candidates)
+        res = None
+        for _em in range(30):
+            res = _run_multi_start(warm_x0)
+            if res is None:
+                raise RuntimeError("Keplerian fit failed: no optimization result.")
+            params_try = _project_params_to_fixed_e(res.x, fix_e)
+            model_try = rv_model(params_try, t, t_ref)
+            new_jit = _profile_jitter_kms(y, model_try, yerr)
+            if _em > 0 and abs(new_jit - jitter_hold) < 1e-5:
+                jitter_hold = new_jit
+                break
+            jitter_hold = new_jit
+            warm_x0 = [res.x]
+    else:
+        res = _run_multi_start(x0_candidates)
+        if res is None:
+            raise RuntimeError("Keplerian fit failed: no optimization result.")
 
-    res = best_res
     params = _project_params_to_fixed_e(res.x, fix_e)
     P = float(np.exp(params[0]))
     K = float(params[1])
@@ -834,8 +925,10 @@ def fit_keplerian(
     t_peri = float(t_ref - M0 / n)
 
     model = rv_model(params, t, t_ref)
-    chi2 = float(np.sum(((y - model) / np.clip(yerr, 1e-4, None)) ** 2))
-    n_fit_params = 5 if fix_e is not None else len(params)
+    jitter_fit = float(jitter_hold if fit_jitter else (fixed_jitter or 0.0))
+    sigma_fit = _effective_sigma(yerr, jitter_kms=jitter_fit if jitter_fit > 0 else None)
+    chi2 = float(np.sum(((y - model) / sigma_fit) ** 2))
+    n_fit_params = (5 if fix_e is not None else len(params)) + (1 if fit_jitter else 0)
     dof = max(1, len(t) - n_fit_params)
 
     # Next RV extrema relative to "now" (UTC), for scheduling.
@@ -883,6 +976,9 @@ def fit_keplerian(
         "period_prior_sigma_lnP": float(period_prior_sigma),
         "fixed_period_days": None if fix_period is None else float(fix_period),
         "fixed_eccentricity": None if fix_e is None else float(fix_e),
+        "fit_jitter": bool(fit_jitter),
+        "jitter_fixed_kms": fixed_jitter,
+        "jitter_kms": jitter_fit if jitter_fit > 0 else 0.0,
         "params_raw": params.tolist(),
     }
     return params, report
@@ -1289,6 +1385,8 @@ def fit_all_variants(
     period_min: Optional[float],
     period_max: Optional[float],
     period_prior_sigma: float,
+    fit_jitter: bool = False,
+    jitter_kms: Optional[float] = None,
 ) -> Dict[str, Tuple[np.ndarray, dict]]:
     """Four Keplerian fits: free P/e; fixed P; fixed e; fixed P and e (Gaia when available)."""
     out: Dict[str, Tuple[np.ndarray, dict]] = {}
@@ -1307,6 +1405,8 @@ def fit_all_variants(
             period_max=period_max,
             period_prior=None,
             period_prior_sigma=period_prior_sigma,
+            fit_jitter=fit_jitter,
+            jitter_kms=jitter_kms,
         )
     except (ValueError, RuntimeError):
         return out
@@ -1326,6 +1426,7 @@ def fit_all_variants(
         )
 
     for key, fix_p, fix_e in constrained:
+        init = free_params
         try:
             params, rep = fit_keplerian(
                 t,
@@ -1337,7 +1438,9 @@ def fit_all_variants(
                 period_prior_sigma=period_prior_sigma,
                 fix_period=fix_p,
                 fix_e=fix_e,
-                initial_params=free_params,
+                initial_params=init,
+                fit_jitter=fit_jitter,
+                jitter_kms=jitter_kms,
             )
         except (ValueError, RuntimeError):
             continue
@@ -1366,7 +1469,9 @@ def fit_all_variants(
                         period_prior_sigma=period_prior_sigma,
                         fix_period=fix_p,
                         fix_e=float(e_free),
-                        initial_params=free_params,
+                        initial_params=init,
+                        fit_jitter=fit_jitter,
+                        jitter_kms=jitter_kms,
                     )
                     chi_retry = rep_retry.get("chi2_red")
                     if isinstance(chi_retry, (int, float)) and chi_retry < chi_fp:
@@ -1395,8 +1500,7 @@ def build_plot(
 ) -> None:
     t = np.array([p.mjd for p in points], dtype=float)
     y = np.array([p.rv for p in points], dtype=float)
-    # Plot error bars from RMS column, not formal RV error.
-    yerr_rms = np.array([p.rms for p in points], dtype=float)
+    yerr = effective_yerr_for_points(points, report)
 
     t_ref = report["t_ref_mjd"]
     now_mjd = float(report.get("now_mjd", Time.now().mjd))
@@ -1478,7 +1582,7 @@ def build_plot(
         ax.errorbar(
             t[idx],
             y[idx],
-            yerr=yerr_rms[idx],
+            yerr=yerr[idx],
             fmt=marker,
             ms=5,
             lw=1,
@@ -1495,7 +1599,7 @@ def build_plot(
         ax.errorbar(
             t[idx_lit],
             y[idx_lit],
-            yerr=yerr_rms[idx_lit],
+            yerr=yerr[idx_lit],
             fmt="D",
             ms=4.8,
             lw=1,
@@ -1508,7 +1612,7 @@ def build_plot(
         )
         plotted_any = True
     if not plotted_any:
-        ax.errorbar(t, y, yerr=yerr_rms, fmt="o", ms=5, lw=1, capsize=2, color="black")
+        ax.errorbar(t, y, yerr=yerr, fmt="o", ms=5, lw=1, capsize=2, color="black")
     ax.plot(t_dense, y_dense, "-", lw=2)
     ax.set_xlabel("MJD")
     ax.set_ylabel("RV (km/s)")
@@ -1697,6 +1801,8 @@ def run_one(
     query_gaia_online: bool,
     plots_root: Optional[Path] = None,
     table_m1_msun: Optional[float] = None,
+    fit_jitter: bool = False,
+    jitter_kms: Optional[float] = None,
 ) -> Optional[dict]:
     from darkhunter_rv.rv_keplerian_plots import (
         our_telescope_points,
@@ -1783,6 +1889,8 @@ def run_one(
         period_min=period_min,
         period_max=period_max,
         period_prior_sigma=period_prior_sigma,
+        fit_jitter=fit_jitter,
+        jitter_kms=jitter_kms,
     )
     if "free" not in fit_variants:
         print(f"[SKIP] {summary_path.name}: free RV fit failed")
@@ -1905,6 +2013,17 @@ def main() -> None:
         default=None,
         help="Website tables/data.csv for luminous M1 (Msun) per Gaia id (default: none).",
     )
+    parser.add_argument(
+        "--fit-jitter",
+        action="store_true",
+        help="Fit an intrinsic RV jitter term (added in quadrature to formal errors).",
+    )
+    parser.add_argument(
+        "--rv-jitter-kms",
+        type=float,
+        default=None,
+        help="Fixed intrinsic jitter (km/s) added in quadrature to formal errors (mutually exclusive with --fit-jitter).",
+    )
     parser.add_argument("--force", action="store_true", help="Recompute even if report JSON is newer than summary.")
     args = parser.parse_args()
 
@@ -1977,6 +2096,8 @@ def main() -> None:
             args.query_gaia_online,
             plots_root=output_dir,
             table_m1_msun=table_m1_map.get(str(sid)) if sid else None,
+            fit_jitter=args.fit_jitter,
+            jitter_kms=args.rv_jitter_kms,
         )
         if report is None:
             skipped += 1

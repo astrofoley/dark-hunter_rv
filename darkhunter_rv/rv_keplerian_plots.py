@@ -198,6 +198,7 @@ def _plot_points(
     *,
     include_literature: bool,
     y_values: Optional[np.ndarray] = None,
+    yerr: Optional[np.ndarray] = None,
 ) -> bool:
     plotted = False
     t = np.array([p.mjd for p in points], dtype=float)
@@ -205,7 +206,10 @@ def _plot_points(
         y = np.array([p.rv for p in points], dtype=float)
     else:
         y = np.asarray(y_values, dtype=float)
-    yerr = np.array([p.rms for p in points], dtype=float)
+    if yerr is None:
+        yerr = np.array([p.rv_err for p in points], dtype=float)
+    else:
+        yerr = np.asarray(yerr, dtype=float)
 
     for tel, marker in TEL_MARKER.items():
         idx = [
@@ -329,14 +333,18 @@ def _variant_param_lines(
         ecc = float(vrep["e"])
         m2sini = _m2sini_for_variant(vrep, m1_msun)
         label = FIT_VARIANT_LABEL[key]
+        jit = vrep.get("jitter_kms")
+        jit_s = ""
+        if jit is not None and np.isfinite(jit) and float(jit) > 0:
+            jit_s = f",  σ_jit = {float(jit):.3f} km/s"
         if m2sini is not None:
-            lines.append(f"{label}:  P = {p_days} d,  e = {ecc:.3f},  M₂ sin i = {m2sini:.4f} M☉")
+            lines.append(f"{label}:  P = {p_days} d,  e = {ecc:.3f},  M₂ sin i = {m2sini:.4f} M☉{jit_s}")
         else:
             fm = vrep.get("mass_function_msun")
             if fm is None or not np.isfinite(fm):
                 fm = _fitmod().mass_function_msun(vrep["P_days"], vrep["K_kms"], vrep["e"])
             fm_s = f"{float(fm):.4f}" if fm is not None and np.isfinite(fm) else "—"
-            lines.append(f"{label}:  P = {p_days} d,  e = {ecc:.3f},  f(M) = {fm_s} M☉")
+            lines.append(f"{label}:  P = {p_days} d,  e = {ecc:.3f},  f(M) = {fm_s} M☉{jit_s}")
     return lines
 
 
@@ -367,7 +375,8 @@ def plot_rv_data_only(
 
     fig, ax = plt.subplots(figsize=(10.5, 4.9))
     _shade_apf_window(ax, t_start, t_end, report)
-    _plot_points(ax, pts, include_literature=False)
+    yerr = _fitmod().effective_yerr_for_points(pts, report)
+    _plot_points(ax, pts, include_literature=False, yerr=yerr)
 
     y_lim = _y_limits_data_and_models(t, y, [])
     ax.set_ylim(*y_lim)
@@ -404,12 +413,13 @@ def plot_multi_fit(
 
     t = np.array([p.mjd for p in points], dtype=float)
     y = np.array([p.rv for p in points], dtype=float)
+    yerr = _fitmod().effective_yerr_for_points(points, report)
     t_ref = float(report["t_ref_mjd"])
     t_lo, t_hi = _xlim_from_data(t, report)
     t_dense = np.linspace(t_lo, t_hi, 2000)
 
     fig, ax = plt.subplots(figsize=(10.8, 5.2))
-    _plot_points(ax, points, include_literature=True)
+    _plot_points(ax, points, include_literature=True, yerr=yerr)
     curves = _plot_fit_curves(ax, t_dense, fit_variants, t_ref)
 
     y_lim = _y_limits_data_and_models(t, y, curves)
@@ -467,7 +477,7 @@ def plot_fit_residuals(
 
     t = np.array([p.mjd for p in points], dtype=float)
     y = np.array([p.rv for p in points], dtype=float)
-    yerr = np.array([p.rms for p in points], dtype=float)
+    yerr = _fitmod().effective_yerr_for_points(points, report)
     t_ref = float(report["t_ref_mjd"])
     t_lo, t_hi = _xlim_from_data(t, report)
     t_dense = np.linspace(t_lo, t_hi, 2000)
@@ -501,7 +511,7 @@ def plot_fit_residuals(
     ax_txt = fig.add_subplot(gs[2])
     ax_txt.axis("off")
 
-    _plot_points(ax_top, points, include_literature=True)
+    _plot_points(ax_top, points, include_literature=True, yerr=yerr)
     curves = _plot_fit_curves(ax_top, t_dense, fit_variants, t_ref)
     y_lim = _y_limits_data_and_models(t, y, curves)
     ax_top.set_ylim(*y_lim)
@@ -518,7 +528,7 @@ def plot_fit_residuals(
     plt.setp(ax_top.get_xticklabels(), visible=False)
 
     ax_bot.axhline(0.0, color="0.4", lw=1.0, zorder=1)
-    _plot_points(ax_bot, points, include_literature=True, y_values=resid_data)
+    _plot_points(ax_bot, points, include_literature=True, y_values=resid_data, yerr=yerr)
     for key in FIT_VARIANT_ORDER:
         if key == "free" or key not in dense_map:
             continue

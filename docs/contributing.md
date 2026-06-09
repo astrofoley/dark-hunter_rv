@@ -8,6 +8,7 @@
 | [operations.md](operations.md) | Calibration (`run_calibration_setup`), production (`run_production_remaining`), env vars, cron |
 | [rv_methods_evaluation.md](rv_methods_evaluation.md) | Method validity, adopted-RV cascade, overlap reports |
 | [validation_playbook.md](validation_playbook.md) | Validation / campaign workflows |
+| [plans/INDEX.md](plans/INDEX.md) | RV pipeline GitHub step tracker (issues #37–#45) |
 | [broad_line_method.md](broad_line_method.md) | Broad-line / Hβ methodology notes |
 
 **Validation CLIs** (run from repo root with `PYTHONPATH=.` or `python -m …` as shown):

@@ -1,0 +1,79 @@
+{
+  "run_id": "baseline_2026-06-07",
+  "created_utc": "2026-06-07T20:37:06.186506+00:00",
+  "master_path": "/Users/rfoley/darkhunter/rvs/dark-hunter_rv/calibration/literature_rv_master.csv",
+  "summary_dir": "/Users/rfoley/darkhunter/rvs/dark-hunter_rv/output",
+  "diagnostics_glob": "output/Gaia_DR3_*_diagnostics.csv",
+  "bias_correction_applied": true,
+  "goals": {
+    "pair_window_days": 7.0,
+    "absolute_gate_kms": 1.0,
+    "relative_goal_kms": 0.1
+  },
+  "inventory": {
+    "n_literature_stars": 23,
+    "n_apf_stars": 153,
+    "n_overlap_stars": 8,
+    "n_literature_epochs": 417,
+    "n_apf_epochs": 641,
+    "n_pair_candidates": 371,
+    "n_apf_literature_pairs": 0,
+    "n_apf_apf_pairs": 14,
+    "n_literature_literature_pairs": 357,
+    "pair_counts_by_window": [
+      {
+        "window_days": 7.0,
+        "n_apf_literature": 0,
+        "n_apf_apf": 14,
+        "n_literature_literature": 357
+      },
+      {
+        "window_days": 30.0,
+        "n_apf_literature": 0,
+        "n_apf_apf": 19,
+        "n_literature_literature": 1321
+      },
+      {
+        "window_days": 90.0,
+        "n_apf_literature": 0,
+        "n_apf_apf": 33,
+        "n_literature_literature": 2706
+      },
+      {
+        "window_days": 180.0,
+        "n_apf_literature": 0,
+        "n_apf_apf": 33,
+        "n_literature_literature": 3481
+      },
+      {
+        "window_days": 365.0,
+        "n_apf_literature": 35,
+        "n_apf_apf": 40,
+        "n_literature_literature": 5210
+      }
+    ]
+  },
+  "absolute_gate": {
+    "n_pairs": 0,
+    "threshold_kms": 1.0
+  },
+  "relative_gate": {
+    "n_pairs": 14,
+    "n_stars": 4,
+    "goal_kms": 0.1,
+    "frac_below_goal": 0.2857142857142857,
+    "median_abs_delta_rv_kms": 0.3027120161133041,
+    "p90_abs_delta_rv_kms": 16.27458855284411,
+    "max_abs_delta_rv_kms": 19.511417856964147,
+    "rms_delta_rv_kms": 8.750616433739443
+  },
+  "output_files": {
+    "overlap_stars.csv": "285080595ddd6d9ebaae1b282498a2e2d915a856136744c2ce28b460ebd2c715",
+    "pair_candidates.csv": "9f138d50063f30366e9e64ce96ef16765e5e1e1f430f8f2460b206d15db8375e",
+    "absolute_gate_summary.csv": "f08a677dbf446c933ececd6526d89e99bd9b3f4fb2cb004f68ce763c465352ca",
+    "relative_gate_summary.csv": "19af3bbd73307a907ed720a6bba495d1f4e3781d7e7b0061a92f90d5f8061108",
+    "per_star_gates.csv": "0a0acd12b05bd84e68fddc77019fd9080ba9c5bfd6f8490d726b41beacdd9a47",
+    "baseline_manifest.json": "c0494d8d7beaa1b949116e5a5acb40342fe7ece78b85bc1b28464c63ee3eb747",
+    "REPORT.md": "1aa2c425ac4bb5936c574e502ec3ebbdd13dd440411a54530a0a6d684b5c9222"
+  }
+}
