@@ -40,11 +40,20 @@ website_sync_one_star() {
   fi
 
   if [[ "${DRY_RUN:-0}" != "1" ]]; then
-    run_cmd "$PY" scripts/update_website_table_columns.py \
-      --data-csv "$DATA_CSV" \
-      --output-dir "$OUT" \
-      --reports-dir "$REPORTS_DIR" \
-      --gaia-id "$gid"
+    local csv_lock="${DATA_CSV}.lock"
+    if command -v flock >/dev/null 2>&1; then
+      run_cmd flock -w 600 "$csv_lock" "$PY" scripts/update_website_table_columns.py \
+        --data-csv "$DATA_CSV" \
+        --output-dir "$OUT" \
+        --reports-dir "$REPORTS_DIR" \
+        --gaia-id "$gid"
+    else
+      run_cmd "$PY" scripts/update_website_table_columns.py \
+        --data-csv "$DATA_CSV" \
+        --output-dir "$OUT" \
+        --reports-dir "$REPORTS_DIR" \
+        --gaia-id "$gid"
+    fi
     if [[ -d "$WEBSITE_STARS_DIR/Gaia_DR3_${gid}" ]]; then
       run_cmd rsync -rlptD --omit-dir-times \
         "$WEBSITE_STARS_DIR/Gaia_DR3_${gid}/" \
