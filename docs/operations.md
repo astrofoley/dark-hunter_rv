@@ -18,6 +18,8 @@
 | `DARKHUNTER_PHOENIX_DIR` | PHOENIX HiRes grid root |
 | `DARKHUNTER_METHOD_OFFSETS_FILE` | Path to `method_rv_offsets.txt` (overrides default auto-detect) |
 | `DARKHUNTER_ADOPTED_MAX_SIGMA_KMS` | Max σ (km/s) for “good” tier in cascade (default: same as comparison reports, typically 2.5) |
+| `DARKHUNTER_CHUNK_LAYOUT` | YAML chunk layout (default: `calibration/chunk_layouts/subchunks_4.yaml`) |
+| `DARKHUNTER_BIAS_FILE` | Per-order debias table (default: repo-root `bias_statistics.txt`) |
 
 ## One-command calibration (recommended)
 
@@ -75,6 +77,29 @@ Use **`--include-offset-calibration`** to force reprocessing of offset-training 
 2. Build biases: `python -m validation.build_bias_set --input-dir output --out-dir …`
 3. Install `bias_statistics.txt` next to `InstrumentProfile.bias_file` (APF: repo root).
 4. Offsets: `python -m validation.compute_method_rv_offsets --diagnostics-list … --output method_rv_offsets.txt`
+
+## Production RV refit (one star: re-measure + Keplerian fit)
+
+Re-run the pipeline with the **production chunk layout** (`subchunks_4`), **committed debias table**, and mask-CCF summary RVs, then fit:
+
+```bash
+cd /Users/rfoley/darkhunter/rvs/dark-hunter_rv
+STAR_ID=1702370142434513152 \
+SPEC_ROOT=/Users/rfoley/darkhunter/rvs/data \
+bash scripts/refit_star_rvs.sh
+```
+
+**Server (ziggy):**
+
+```bash
+cd /data2/darkhunter/dark-hunter_rv
+git fetch origin && git checkout step/01-benchmark-cool-precision && git pull
+STAR_ID=1702370142434513152 bash scripts/refit_star_rvs.sh
+```
+
+Use `python3` (or set `PY=...`) on the server — bare `python` may be Python 2.7. Set `DARKHUNTER_PHOENIX_DIR` if HiRes PHOENIX is not under `~/phoenix/HiResFITS` or `phoenix_models/`.
+
+**Debias:** `bias_statistics.txt` at repo root (56 APF orders). Per sub-chunk, debias uses the parent echelle order (`9_2` → order 9). Rebuild after layout changes via `validation.run_calibration_setup` (issue #57).
 
 ## Daily / cron processing
 

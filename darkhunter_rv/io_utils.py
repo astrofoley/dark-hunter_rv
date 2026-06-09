@@ -207,7 +207,7 @@ def read_method_rv_offsets(
 
 
 def write_order_results(order_data, input_filename):
-    config.OUTPUT_DIR.mkdir(exist_ok=True)
+    config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     base = Path(input_filename).stem
     outfile = config.OUTPUT_DIR / f"{base}_orders.txt"
     with open(outfile, "w") as f:
@@ -219,7 +219,7 @@ def write_order_results(order_data, input_filename):
             f.write(f"{order} {rv} {err}\n")
 
 def write_summary(processed_data):
-    config.OUTPUT_DIR.mkdir(exist_ok=True)
+    config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     if not processed_data: return
     first_file = Path(processed_data[0]["file"]).name
     parts = first_file.split("_")
@@ -290,7 +290,7 @@ def write_star_summary(obj_id, gaia_data, pipeline_results):
     (basename-keyed) so batch diagnose runs that invoke the pipeline once per spectrum do not
     overwrite previous epochs.
     """
-    config.OUTPUT_DIR.mkdir(exist_ok=True)
+    config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     outfile = config.OUTPUT_DIR / f"Gaia_DR3_{obj_id}_summary.txt"
 
     merged: dict[str, str] = {}
