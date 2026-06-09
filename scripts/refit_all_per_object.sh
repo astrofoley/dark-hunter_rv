@@ -21,7 +21,16 @@ REPO="${REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
 OUT="${OUT:-$REPO/output}"
 WEB_ROOT="${WEB_ROOT:-/var/www/html/darkhunter/rv}"
 SPEC_ROOT="${SPEC_ROOT:-/data2/gaia_stars/apf_reductions}"
-PY="${PY:-/home/marley/anaconda2/envs/gaia-env/bin/python}"
+if [[ -n "${PY:-}" ]] && command -v "$PY" >/dev/null 2>&1; then
+  :
+elif [[ -x /home/marley/anaconda2/envs/gaia-env/bin/python ]]; then
+  PY=/home/marley/anaconda2/envs/gaia-env/bin/python
+else
+  PY=python3
+fi
+CHUNK_LAYOUT="${CHUNK_LAYOUT:-$REPO/calibration/chunk_layouts/subchunks_4.yaml}"
+PIPELINE_FORCE="${PIPELINE_FORCE:-0}"
+MASK_PRIMARY="${MASK_PRIMARY:-1}"
 REPORTS_DIR="${REPORTS_DIR:-$REPO/rv_fit_reports}"
 MIN_POINTS="${MIN_POINTS:-5}"
 FIT_FORCE="${FIT_FORCE:-1}"
@@ -73,8 +82,19 @@ fi
 echo "stars_to_process=${#STAR_IDS[@]}"
 
 pipeline_args=(--instrument APF --plots --plots-focus)
-if [[ "$PIPELINE_UPDATE" == "1" ]]; then
+if [[ -f "$CHUNK_LAYOUT" ]]; then
+  pipeline_args+=(--chunk-layout "$CHUNK_LAYOUT")
+fi
+if [[ "$PIPELINE_FORCE" == "1" ]]; then
+  pipeline_args+=(--force)
+elif [[ "$PIPELINE_UPDATE" == "1" ]]; then
   pipeline_args+=(--update)
+fi
+if [[ "$MASK_PRIMARY" == "1" ]]; then
+  pipeline_args+=(--no-run-all-methods)
+fi
+if [[ ! -f "$REPO/bias_statistics.txt" ]]; then
+  echo "[WARN] $REPO/bias_statistics.txt missing — mask RVs will not be debiased" >&2
 fi
 
 n_ok=0

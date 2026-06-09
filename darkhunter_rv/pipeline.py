@@ -5,6 +5,7 @@ import argparse
 import copy
 import csv
 import json
+import os
 import re
 import logging
 import sys
@@ -23,6 +24,27 @@ _STACK_CLIP_SIGMA = 3.2
 _STACK_CLIP_MAXITERS = 2
 _STACK_CLIP_MIN_KEEP_FRAC = 0.35
 _STACK_CLIP_MIN_KEEP_ABS = 4
+
+
+def _resolve_chunk_layout(args: argparse.Namespace) -> None:
+    """Apply env/default production chunk layout when --chunk-layout is omitted."""
+    if args.chunk_layout is not None:
+        p = Path(args.chunk_layout)
+        if not p.is_file():
+            logger.error("Chunk layout not found: %s", p)
+            sys.exit(2)
+        return
+    env = os.environ.get("DARKHUNTER_CHUNK_LAYOUT")
+    if env:
+        p = Path(env)
+        if p.is_file():
+            args.chunk_layout = p
+            return
+        logger.warning("DARKHUNTER_CHUNK_LAYOUT=%s not found; trying repo default", env)
+    if config.DEFAULT_CHUNK_LAYOUT is not None and config.DEFAULT_CHUNK_LAYOUT.is_file():
+        args.chunk_layout = config.DEFAULT_CHUNK_LAYOUT
+
+
 def _apply_gaia_metadata_to_args(args: argparse.Namespace, gaia_data: dict | None) -> None:
     """Mutate ``args`` teff / logg / mh from Gaia ``metadata`` when present."""
     if not gaia_data:
@@ -642,6 +664,17 @@ def process_spectrum(
     bias: dict = {}
     if not args.no_bias and instrument.bias_file:
         bias = io_utils.read_bias(instrument.bias_file)
+        if bias:
+            logger.info(
+                "Per-order debias: %d entries from %s (b0 RV shift; b1/b2 err inflation)",
+                len(bias),
+                instrument.bias_file,
+            )
+        elif instrument.bias_file:
+            logger.warning(
+                "Bias file missing or empty (%s); mask CCF RVs are not debiased",
+                instrument.bias_file,
+            )
 
     diagnostics_rows: list[dict] = []
     rv_results: dict = {}
@@ -1634,6 +1667,19 @@ def main(argv: list[str] | None = None) -> None:
     except ValueError as e:
         logger.error("%s", e)
         sys.exit(2)
+
+    _resolve_chunk_layout(args)
+    if args.chunk_layout:
+        logger.info("Chunk layout: %s", args.chunk_layout)
+    if not args.no_bias:
+        bias_path = Path(inst.bias_file) if inst.bias_file else None
+        if bias_path and bias_path.is_file():
+            logger.info("Bias file: %s", bias_path)
+        else:
+            logger.warning(
+                "Bias file missing (%s); per-order debias disabled unless --no-bias set explicitly",
+                bias_path,
+            )
 
     plot_root = None
     if args.plots:
