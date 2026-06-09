@@ -41,9 +41,12 @@ from validation.chunk_layout import (  # noqa: E402
 )
 from validation.chunk_measurement_cache import (  # noqa: E402
     diagnostics_glob_for_layout,
+    drop_layout_from_cache,
+    find_cache_layout_collisions,
     ingest_layout_diagnostics_dir,
     layout_files_complete,
     load_cache,
+    rebuild_cache_from_diagnostics,
     save_cache,
 )
 from validation.evaluate_chunk_layout import evaluate_layouts_from_glob  # noqa: E402
@@ -186,7 +189,7 @@ def write_next_steps(path: Path, *, best: pd.Series | None, stage_b_best: pd.Ser
         "- Broad grid: split N=2,3,4 and merge W=2,3,4 (full pipeline)",
         "- Edge presets: equal, blue-heavy, red-heavy, telluric-aware",
         "- Stage B coordinate-descent edge candidates",
-        "- Measurement cache: `measurement_cache.csv` (dedupe by measurement_id + file)",
+        "- Measurement cache: `measurement_cache.csv` (dedupe by layout_name + measurement_id + file)",
         "",
         "## Best layouts so far",
     ]
@@ -231,6 +234,8 @@ def run_campaign(
     edge_n_chunks: int,
     run_stage_b: bool,
     skip_pipeline_if_cached: bool,
+    only_layouts: list[str] | None = None,
+    force_layouts: set[str] | None = None,
 ) -> pd.DataFrame:
     campaign_dir.mkdir(parents=True, exist_ok=True)
     cache_path = campaign_dir / CACHE_NAME
@@ -247,10 +252,25 @@ def run_campaign(
             unique_layouts.append(lay)
             seen.add(lay.name)
 
+    if only_layouts:
+        want = set(only_layouts)
+        unique_layouts = [lay for lay in unique_layouts if lay.name in want]
+        if not unique_layouts:
+            logger.error("No layouts matched --only-layouts %s", sorted(want))
+            return pd.DataFrame()
+
+    force_layouts = force_layouts or set()
+
+    for layout in unique_layouts:
+        save_chunk_layout(layout, campaign_dir / "layouts" / f"{layout.name}.yaml")
+
     if run_pipeline:
         for layout in unique_layouts:
+            if layout.name in force_layouts:
+                cache = drop_layout_from_cache(cache, layout.name)
+                save_cache(cache, cache_path)
             todo = spectrum_files
-            if skip_pipeline_if_cached:
+            if skip_pipeline_if_cached and layout.name not in force_layouts:
                 done = layout_files_complete(cache, layout_name=layout.name, spectrum_files=spectrum_files)
                 todo = [f for f in spectrum_files if f not in done]
             if not todo:
@@ -366,10 +386,59 @@ def main() -> None:
     ap.add_argument("--run-stage-b", action="store_true", default=True)
     ap.add_argument("--no-stage-b", action="store_false", dest="run_stage_b")
     ap.add_argument("--skip-pipeline-if-cached", action="store_true", default=True)
+    ap.add_argument(
+        "--no-skip-pipeline-if-cached",
+        action="store_false",
+        dest="skip_pipeline_if_cached",
+        help="Re-run pipeline for every spectrum in each layout (ignore cache completeness).",
+    )
+    ap.add_argument(
+        "--only-layouts",
+        default="",
+        help="Comma-separated layout names to run/evaluate (default: full campaign grid).",
+    )
+    ap.add_argument(
+        "--force-layouts",
+        default="",
+        help="Comma-separated layouts to re-pipeline even if cached (drops their cache rows first).",
+    )
+    ap.add_argument(
+        "--repair-cache",
+        action="store_true",
+        help="Rebuild measurement_cache.csv from diagnostics/*/ on disk, then exit unless --run-pipeline.",
+    )
+    ap.add_argument(
+        "--repair-cache-layouts",
+        default="",
+        help="With --repair-cache: only rebuild these layouts (comma-separated); default all under layouts/.",
+    )
     ap.add_argument("--log-level", default="INFO")
     args = ap.parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
     args.out_dir.mkdir(parents=True, exist_ok=True)
+
+    cache_path = args.out_dir / CACHE_NAME
+    if args.repair_cache:
+        repair_layouts = [x.strip() for x in args.repair_cache_layouts.split(",") if x.strip()] or None
+        cache = rebuild_cache_from_diagnostics(args.out_dir, layout_names=repair_layouts)
+        save_cache(cache, cache_path)
+        collisions = find_cache_layout_collisions(cache)
+        logger.info(
+            "Rebuilt cache -> %s (%d rows, %d layout(s))",
+            cache_path,
+            len(cache),
+            cache["layout_name"].nunique() if len(cache) else 0,
+        )
+        if len(collisions):
+            logger.warning(
+                "Cross-layout cache collisions (same measurement_id+file, multiple layouts): %d",
+                len(collisions),
+            )
+        if not args.run_pipeline:
+            return
+
+    only_layouts = [x.strip() for x in args.only_layouts.split(",") if x.strip()] or None
+    force_layouts = {x.strip() for x in args.force_layouts.split(",") if x.strip()} or None
 
     list_path = args.spectrum_list or (args.out_dir / "spectrum_list.txt")
     if list_path.is_file():
@@ -389,6 +458,8 @@ def main() -> None:
         edge_n_chunks=args.edge_n_chunks,
         run_stage_b=args.run_stage_b,
         skip_pipeline_if_cached=args.skip_pipeline_if_cached,
+        only_layouts=only_layouts,
+        force_layouts=force_layouts,
     )
     logger.info("Campaign done -> %s", args.out_dir)
 
