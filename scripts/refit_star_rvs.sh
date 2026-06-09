@@ -47,12 +47,15 @@ if [[ -z "$STAR_ID" ]]; then
   exit 2
 fi
 
-if command -v "${PY:-}" >/dev/null 2>&1; then
+if [[ -n "${PY:-}" ]] && command -v "$PY" >/dev/null 2>&1; then
   :
 elif [[ -x /home/marley/anaconda2/envs/gaia-env/bin/python ]]; then
   PY=/home/marley/anaconda2/envs/gaia-env/bin/python
-else
+elif command -v python3 >/dev/null 2>&1; then
   PY=python3
+else
+  echo "[ERROR] No Python 3 found (set PY=python3 or gaia-env python)." >&2
+  exit 2
 fi
 
 cd "$REPO"
@@ -102,7 +105,10 @@ if [[ "$MASK_PRIMARY" == "1" ]]; then
   pipeline_args+=(--no-run-all-methods)
 fi
 
-"$PY" -m darkhunter_rv.pipeline "${pipeline_args[@]}" "${SPEC_FILES[@]}"
+if ! "$PY" -m darkhunter_rv.pipeline "${pipeline_args[@]}" "${SPEC_FILES[@]}"; then
+  echo "[ERROR] Pipeline failed for Gaia_DR3_${STAR_ID}" >&2
+  exit 1
+fi
 
 summ="$OUT/Gaia_DR3_${STAR_ID}_summary.txt"
 if [[ ! -f "$summ" ]]; then
