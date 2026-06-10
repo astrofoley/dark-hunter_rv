@@ -187,6 +187,11 @@ def load_observability_window(source_id: Optional[str], cache_path: Optional[Pat
             "windows": windows,
             "circumpolar": circumpolar,
         }
+        if circumpolar:
+            w0 = windows[0] if isinstance(windows[0], dict) else {}
+            out["start_date"] = w0.get("start_date", "") or ""
+            out["end_date"] = w0.get("end_date", "") or ""
+            return out
         if isinstance(s, str) and s and isinstance(e, str) and e:
             out["start_date"] = s
             out["end_date"] = e

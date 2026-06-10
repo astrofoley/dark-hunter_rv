@@ -106,9 +106,22 @@ def _observability_windows(report: dict) -> List[dict]:
         return []
     windows = obs_win.get("windows")
     if isinstance(windows, list) and windows:
-        return [w for w in windows if isinstance(w, dict) and w.get("start_date") and w.get("end_date")]
+        out: List[dict] = []
+        for w in windows:
+            if not isinstance(w, dict):
+                continue
+            if w.get("start_date") and w.get("end_date"):
+                out.append(w)
+            elif w.get("start_mjd") is not None and w.get("end_mjd") is not None:
+                out.append(w)
+        if out:
+            return out
     if obs_win.get("start_date") and obs_win.get("end_date"):
         return [obs_win]
+    if obs_win.get("circumpolar") and isinstance(windows, list) and windows:
+        w0 = windows[0]
+        if isinstance(w0, dict) and w0.get("start_mjd") is not None:
+            return [w0]
     return []
 
 
@@ -123,8 +136,12 @@ def _observability_span(report: dict) -> Tuple[Optional[float], Optional[float],
     ends: List[float] = []
     for w in windows:
         try:
-            starts.append(float(Time(w["start_date"], format="iso", scale="utc").mjd))
-            ends.append(float(Time(w["end_date"], format="iso", scale="utc").mjd) + 1.0)
+            if w.get("start_mjd") is not None and w.get("end_mjd") is not None:
+                starts.append(float(w["start_mjd"]))
+                ends.append(float(w["end_mjd"]) + 1.0)
+            elif w.get("start_date") and w.get("end_date"):
+                starts.append(float(Time(w["start_date"], format="iso", scale="utc").mjd))
+                ends.append(float(Time(w["end_date"], format="iso", scale="utc").mjd) + 1.0)
         except Exception:
             continue
     if not starts or not ends:
@@ -146,24 +163,33 @@ def _shade_apf_window(
     windows = _observability_windows(report)
     if not windows:
         return
+    now_mjd = float(report.get("now_mjd", Time.now().mjd))
+    plot_cap_mjd = now_mjd + 183.0
     label_parts: List[str] = []
     for w in windows:
         try:
-            obs_start = float(Time(w["start_date"], format="iso", scale="utc").mjd)
-            obs_end = float(Time(w["end_date"], format="iso", scale="utc").mjd) + 1.0
+            if w.get("start_mjd") is not None and w.get("end_mjd") is not None:
+                obs_start = float(w["start_mjd"])
+                obs_end = float(w["end_mjd"]) + 1.0
+            else:
+                obs_start = float(Time(w["start_date"], format="iso", scale="utc").mjd)
+                obs_end = float(Time(w["end_date"], format="iso", scale="utc").mjd) + 1.0
         except Exception:
             continue
         left = max(t_start, obs_start)
-        right = min(t_end, obs_end)
+        right = min(t_end, obs_end, plot_cap_mjd)
         if right <= left:
             continue
         ax.axvspan(left, right, color="tab:blue", alpha=0.12, zorder=0)
-        label_parts.append(f"{w['start_date']} to {w['end_date']}")
-    if annotate and label_parts:
+        if w.get("start_date") and w.get("end_date"):
+            label_parts.append(f"{w['start_date']} to {w['end_date']}")
+    msg = ""
+    if annotate:
         if obs_win.get("circumpolar"):
-            msg = "Circumpolar (airmass ≤ 2.5): " + "; ".join(label_parts[:2])
-        else:
-            msg = "APF window " + "; ".join(label_parts[:3])
+            msg = f"Circumpolar (airmass ≤ 1.7, next {int(plot_cap_mjd - now_mjd)} d)"
+        elif label_parts:
+            msg = "APF window " + label_parts[0]
+    if annotate and msg:
         ax.text(
             0.985,
             0.02,

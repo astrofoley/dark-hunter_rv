@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from astropy import units as u
@@ -14,21 +14,36 @@ from astropy.time import Time
 from darkhunter_rv.gaia_utils import parse_gaia_metadata_from_star_summary
 from darkhunter_rv.summary_paths import parse_object_id_from_summary
 
-# APF at Lick Observatory (approximate IERS values).
+# APF at Lick Observatory.
 LICK_LOCATION = EarthLocation(lat=37.3413 * u.deg, lon=-121.6438 * u.deg, height=1280 * u.m)
 
-TWILIGHT_SUN_ALT_DEG = -18.0
-MAX_AIRMASS = 2.5
-MIN_OBS_MINUTES = 15
+TWILIGHT_SUN_ALT_DEG = -12.0
+TWILIGHT_BUFFER_MINUTES = 30
+MAX_AIRMASS = 1.7
+MIN_OBS_MINUTES = 30
 STEP_MINUTES = 5
-HORIZON_DAYS = 90
+HORIZON_DAYS = 183  # ~6 months
+PLOT_HORIZON_DAYS = HORIZON_DAYS
+
+
+def _altitude_deg_for_airmass(airmass: float) -> float:
+    if airmass <= 1.0:
+        return 90.0
+    z_rad = float(np.arccos(np.clip(1.0 / airmass, -1.0, 1.0)))
+    return float(90.0 - np.rad2deg(z_rad))
+
+
+ALTITUDE_MIN_DEG = _altitude_deg_for_airmass(MAX_AIRMASS)
 
 
 def _airmass_from_altitude_deg(alt_deg: float) -> float:
     if not np.isfinite(alt_deg) or alt_deg <= 0:
         return float("inf")
     z_rad = np.deg2rad(90.0 - float(alt_deg))
-    return float(1.0 / np.cos(z_rad))
+    cos_z = float(np.cos(z_rad))
+    if cos_z <= 0:
+        return float("inf")
+    return 1.0 / cos_z
 
 
 def _target_coord_from_summary(summary_path: Path) -> Optional[SkyCoord]:
@@ -72,9 +87,195 @@ def _sun_alt_deg(time: Time, location: EarthLocation) -> float:
     return float(sun_aa.alt.deg)
 
 
-def _is_circumpolar_at_lick(coord: SkyCoord) -> bool:
-    """Northern circumpolar at Lick: dec > 90 - lat."""
-    return float(coord.dec.deg) > (90.0 - float(LICK_LOCATION.lat.deg) - 0.05)
+@dataclass
+class NightRecord:
+    """One local night at Lick between 12° twilights."""
+
+    evening_twilight_mjd: float
+    morning_twilight_mjd: float
+    calendar_date: str
+    strict_ok: bool
+    up_during_night: bool
+
+
+def _mjd_to_iso_date(mjd: float) -> str:
+    return Time(float(mjd), format="mjd", scale="utc").datetime.strftime("%Y-%m-%d")
+
+
+def _sun_alts_deg(mjds: np.ndarray) -> np.ndarray:
+    """Vectorized sun altitude (deg) at Lick via ERFA."""
+    import erfa
+
+    out = np.empty(len(mjds), dtype=float)
+    for i, mjd in enumerate(mjds):
+        out[i] = _sun_alt_deg(Time(float(mjd), format="mjd", scale="utc"), LICK_LOCATION)
+    return out
+
+
+def _target_alts_deg(coord: SkyCoord, mjds: np.ndarray) -> np.ndarray:
+    times = Time(mjds, format="mjd", scale="utc")
+    aa = coord.transform_to(AltAz(obstime=times, location=LICK_LOCATION))
+    return np.asarray(aa.alt.deg, dtype=float)
+
+
+def _sample_nights(
+    coord: SkyCoord,
+    start_mjd: float,
+    end_mjd: float,
+) -> List[NightRecord]:
+    """Walk 5-min steps, segment into nautical-twilight nights, evaluate each."""
+    step_days = STEP_MINUTES / (24.0 * 60.0)
+    min_steps = max(1, int(round(MIN_OBS_MINUTES / STEP_MINUTES)))
+    buffer_days = TWILIGHT_BUFFER_MINUTES / (24.0 * 60.0)
+
+    mjds = np.arange(start_mjd, end_mjd + step_days, step_days, dtype=float)
+    if mjds.size == 0:
+        return []
+
+    chunk = 4000
+    sun_alts = np.concatenate(
+        [_sun_alts_deg(mjds[i : i + chunk]) for i in range(0, len(mjds), chunk)]
+    )
+    target_alts = np.concatenate(
+        [_target_alts_deg(coord, mjds[i : i + chunk]) for i in range(0, len(mjds), chunk)]
+    )
+
+    nights: List[NightRecord] = []
+    in_night = False
+    evening_mjd: Optional[float] = None
+    strict_streak = 0
+    strict_ok = False
+    up_during_night = False
+
+    def _close_night(morn_mjd: float) -> None:
+        nonlocal strict_ok, up_during_night, strict_streak
+        if evening_mjd is None:
+            return
+        nights.append(
+            NightRecord(
+                evening_twilight_mjd=evening_mjd,
+                morning_twilight_mjd=morn_mjd,
+                calendar_date=_mjd_to_iso_date(evening_mjd),
+                strict_ok=strict_ok,
+                up_during_night=up_during_night,
+            )
+        )
+        strict_ok = False
+        up_during_night = False
+        strict_streak = 0
+
+    for i in range(len(mjds)):
+        t = float(mjds[i])
+        sun_alt = float(sun_alts[i])
+        target_alt = float(target_alts[i])
+        prev_sun = float(sun_alts[i - 1]) if i > 0 else sun_alt + 1.0
+        am = _airmass_from_altitude_deg(target_alt)
+
+        if not in_night and prev_sun > TWILIGHT_SUN_ALT_DEG >= sun_alt:
+            in_night = True
+            evening_mjd = t
+            strict_ok = False
+            up_during_night = False
+            strict_streak = 0
+
+        if in_night:
+            if sun_alt < 0.0 and target_alt > 0.0:
+                up_during_night = True
+
+            in_extended = evening_mjd is not None and t >= evening_mjd - buffer_days
+            if in_extended and np.isfinite(am) and am <= MAX_AIRMASS:
+                strict_streak += 1
+                if strict_streak >= min_steps:
+                    strict_ok = True
+            else:
+                strict_streak = 0
+
+            if prev_sun <= TWILIGHT_SUN_ALT_DEG < sun_alt:
+                _close_night(t)
+                in_night = False
+                evening_mjd = None
+
+    return nights
+
+
+def _is_circumpolar_for_apf(
+    coord: SkyCoord,
+    start_mjd: float,
+    end_mjd: float,
+) -> bool:
+    """
+    True only when the target stays above the airmass-1.7 limit whenever the
+    sun is below 12° twilight (observable every night at APF elevations).
+    """
+    step_days = 15.0 / (24.0 * 60.0)  # coarser grid for classification only
+    mjds = np.arange(start_mjd, end_mjd + step_days, step_days, dtype=float)
+    if mjds.size == 0:
+        return False
+    sun_alts = _sun_alts_deg(mjds)
+    night_mask = sun_alts <= TWILIGHT_SUN_ALT_DEG
+    if not np.any(night_mask):
+        return False
+    target_alts = _target_alts_deg(coord, mjds[night_mask])
+    min_alt = float(np.nanmin(target_alts))
+    return min_alt >= ALTITUDE_MIN_DEG - 0.5
+
+
+def _find_season_window(
+    nights: List[NightRecord],
+    today_mjd: float,
+) -> Optional[Tuple[str, str, float, float]]:
+    """
+    Return (start_date, end_date, start_mjd, end_mjd) for the current or next season.
+
+    A season is a contiguous block of nights when the target is up during the night.
+    The first night of a block must pass the strict twilight/airmass test; interior
+    nights only need to be above the horizon at some point during nautical night.
+    """
+    if not nights:
+        return None
+
+    runs: List[List[NightRecord]] = []
+    current: List[NightRecord] = []
+
+    for night in nights:
+        if not current:
+            if night.strict_ok:
+                current = [night]
+        elif night.up_during_night:
+            current.append(night)
+        else:
+            runs.append(current)
+            current = []
+            if night.strict_ok:
+                current = [night]
+
+    if current:
+        runs.append(current)
+
+    if not runs:
+        return None
+
+    def _run_span(run: List[NightRecord]) -> Tuple[str, str, float, float]:
+        start = run[0]
+        end = run[-1]
+        return (
+            start.calendar_date,
+            end.calendar_date,
+            start.evening_twilight_mjd,
+            end.morning_twilight_mjd,
+        )
+
+    # Prefer season containing today; else next season; else last season.
+    for run in runs:
+        start_mjd, end_mjd = run[0].evening_twilight_mjd, run[-1].morning_twilight_mjd
+        if start_mjd <= today_mjd <= end_mjd + 1.0:
+            return _run_span(run)
+
+    for run in runs:
+        if run[0].evening_twilight_mjd >= today_mjd - 1.0:
+            return _run_span(run)
+
+    return _run_span(runs[-1])
 
 
 @dataclass
@@ -93,29 +294,6 @@ class ObsWindow:
         }
 
 
-def _mjd_to_iso_date(mjd: float) -> str:
-    return Time(float(mjd), format="mjd", scale="utc").datetime.strftime("%Y-%m-%d")
-
-
-def _merge_windows(windows: List[ObsWindow], *, gap_days: float = 1.5) -> List[ObsWindow]:
-    if not windows:
-        return []
-    ordered = sorted(windows, key=lambda w: w.start_mjd)
-    merged: List[ObsWindow] = [ordered[0]]
-    for w in ordered[1:]:
-        prev = merged[-1]
-        if w.start_mjd - prev.end_mjd <= gap_days:
-            merged[-1] = ObsWindow(
-                start_mjd=prev.start_mjd,
-                end_mjd=max(prev.end_mjd, w.end_mjd),
-                start_date=prev.start_date,
-                end_date=w.end_date,
-            )
-        else:
-            merged.append(w)
-    return merged
-
-
 def compute_apf_observability(
     coord: SkyCoord,
     *,
@@ -123,77 +301,40 @@ def compute_apf_observability(
     horizon_days: int = HORIZON_DAYS,
 ) -> Dict[str, Any]:
     """
-    Find APF-visible intervals within horizon_days of start_mjd.
+    APF visibility season at Lick.
 
-    Observable when target airmass <= 2.5 for >= 15 minutes after astronomical twilight (-18°).
+    - Nautical twilight (-12°); target airmass ≤ 1.7 for ≥30 min within ±30 min of twilight
+      defines season entry (rising near sunrise) and quality on boundary nights.
+    - Between season start and end, any night the target is above the horizon counts.
+    - One window: next/current season start → when the target sets out of the window.
+    - Circumpolar: target stays above airmass 1.7 all nautical nights (very high dec).
     """
     now_mjd = float(Time.now().mjd) if start_mjd is None else float(start_mjd)
-    end_mjd = now_mjd + float(horizon_days)
+    plot_end_mjd = now_mjd + float(min(horizon_days, PLOT_HORIZON_DAYS))
+    scan_end_mjd = plot_end_mjd + 1.0
 
-    if _is_circumpolar_at_lick(coord):
-        start_date = _mjd_to_iso_date(now_mjd)
-        end_date = _mjd_to_iso_date(end_mjd)
-        win = ObsWindow(now_mjd, end_mjd, start_date, end_date)
+    if _is_circumpolar_for_apf(coord, now_mjd, scan_end_mjd):
+        win = ObsWindow(now_mjd, plot_end_mjd, "", "")
         return {
             "circumpolar": True,
             "windows": [win.to_dict()],
-            "next_window_start_date": start_date,
-            "next_window_end_date": end_date,
+            "next_window_start_date": "",
+            "next_window_end_date": "",
         }
 
-    step_days = STEP_MINUTES / (24.0 * 60.0)
-    min_steps = max(1, int(round(MIN_OBS_MINUTES / STEP_MINUTES)))
-    windows: List[ObsWindow] = []
-    t = now_mjd
-    run_start: Optional[float] = None
-    run_end: Optional[float] = None
-    streak = 0
-    night_active = False
+    nights = _sample_nights(coord, now_mjd - 2.0, scan_end_mjd)
+    season = _find_season_window(nights, now_mjd)
 
-    while t <= end_mjd + step_days:
-        time = Time(t, format="mjd", scale="utc")
-        sun_alt = _sun_alt_deg(time, LICK_LOCATION)
-        in_night = sun_alt <= TWILIGHT_SUN_ALT_DEG
-
-        observable = False
-        if in_night:
-            target_aa = coord.transform_to(AltAz(obstime=time, location=LICK_LOCATION))
-            am = _airmass_from_altitude_deg(float(target_aa.alt.deg))
-            observable = np.isfinite(am) and am <= MAX_AIRMASS
-
-        if in_night and observable:
-            if run_start is None:
-                run_start = t
-            streak += 1
-            run_end = t
-            night_active = True
-        else:
-            if night_active and run_start is not None and run_end is not None and streak >= min_steps:
-                windows.append(
-                    ObsWindow(
-                        start_mjd=run_start,
-                        end_mjd=run_end + step_days,
-                        start_date=_mjd_to_iso_date(run_start),
-                        end_date=_mjd_to_iso_date(run_end),
-                    )
-                )
-            run_start = None
-            run_end = None
-            streak = 0
-            night_active = False
-        t += step_days
-
-    merged = _merge_windows(windows)
-    if not merged:
+    if season is None:
         return {"circumpolar": False, "windows": []}
 
-    first = merged[0]
-    last = merged[-1]
+    start_date, end_date, start_mjd_win, end_mjd_win = season
+    win = ObsWindow(start_mjd_win, end_mjd_win, start_date, end_date)
     return {
         "circumpolar": False,
-        "windows": [w.to_dict() for w in merged],
-        "next_window_start_date": first.start_date,
-        "next_window_end_date": last.end_date,
+        "windows": [win.to_dict()],
+        "next_window_start_date": start_date,
+        "next_window_end_date": end_date,
     }
 
 
@@ -203,7 +344,7 @@ def observability_for_summary(summary_path: Path) -> Optional[Dict[str, Any]]:
     if sid is None or coord is None:
         return None
     result = compute_apf_observability(coord)
-    if not result.get("windows"):
+    if not result.get("windows") and not result.get("circumpolar"):
         return None
     result["gaia_source_id"] = sid
     return result
