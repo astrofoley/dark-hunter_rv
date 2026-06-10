@@ -85,8 +85,12 @@ def build_campaign_broad_grid() -> list[ChunkLayout]:
 
 
 def build_campaign_edge_grid(n_chunks: int = 3) -> list[ChunkLayout]:
-    """Edge preset variants after broad grid."""
-    presets = ("equal", "blue_heavy", "red_heavy", "telluric")
+    """
+    Edge preset variants after broad grid.
+
+    Omits ``equal`` — same pixel edges as ``subchunks_{n}`` from :func:`build_campaign_broad_grid`.
+    """
+    presets = ("blue_heavy", "red_heavy", "telluric")
     return [build_edge_preset_layout(n_chunks, p) for p in presets]
 
 

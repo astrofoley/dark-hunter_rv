@@ -95,7 +95,11 @@ def ingest_diagnostics_csv(
         return cache
     new_df = pd.DataFrame(rows)
     combined = pd.concat([cache, new_df], ignore_index=True)
-    combined = combined.drop_duplicates(subset=["measurement_id", "file"], keep="last")
+    # layout_name required: subchunks_3 and n3_equal share identical pixel edges → same measurement_id.
+    combined = combined.drop_duplicates(
+        subset=["layout_name", "measurement_id", "file"],
+        keep="last",
+    )
     return combined[CACHE_COLUMNS]
 
 
@@ -136,3 +140,58 @@ def layout_files_complete(
 def diagnostics_glob_for_layout(campaign_dir: Path, layout_name: str) -> str:
     d = campaign_dir / "diagnostics" / layout_name
     return str(d / "Gaia_DR3_*_diagnostics.csv")
+
+
+def drop_layout_from_cache(cache: pd.DataFrame, layout_name: str) -> pd.DataFrame:
+    """Remove all cache rows for one layout (before forced re-pipeline)."""
+    if cache.empty:
+        return cache
+    return cache[cache["layout_name"].astype(str) != str(layout_name)].reset_index(drop=True)
+
+
+def find_cache_layout_collisions(cache: pd.DataFrame) -> pd.DataFrame:
+    """
+    (measurement_id, file) keys present under more than one layout_name.
+
+    After the dedup fix this is normal when layouts share pixel edges (e.g. subchunks_3 vs n3_equal).
+    Use to audit cache coverage, not as an error flag.
+    """
+    if cache.empty:
+        return pd.DataFrame(columns=["measurement_id", "file", "layout_names", "n_layouts"])
+    grp = (
+        cache.groupby(["measurement_id", "file"], as_index=False)["layout_name"]
+        .agg(lambda s: sorted(set(str(x) for x in s.astype(str))))
+        .rename(columns={"layout_name": "layout_names"})
+    )
+    grp["n_layouts"] = grp["layout_names"].apply(len)
+    return grp[grp["n_layouts"] > 1].reset_index(drop=True)
+
+
+def rebuild_cache_from_diagnostics(
+    campaign_dir: Path,
+    *,
+    layout_names: list[str] | None = None,
+) -> pd.DataFrame:
+    """
+    Rebuild measurement_cache.csv from on-disk diagnostics/* directories.
+
+    Use after cache clobber (e.g. subchunks_3 rows replaced by n3_equal) when diagnostics
+    trees are still intact per layout.
+    """
+    from validation.chunk_layout import load_chunk_layout
+
+    campaign_dir = Path(campaign_dir)
+    layouts_dir = campaign_dir / "layouts"
+    cache = pd.DataFrame(columns=CACHE_COLUMNS)
+    if not layouts_dir.is_dir():
+        return cache
+    want = set(layout_names) if layout_names else None
+    for yaml_path in sorted(layouts_dir.glob("*.yaml")):
+        layout = load_chunk_layout(yaml_path)
+        if want is not None and layout.name not in want:
+            continue
+        diag_dir = campaign_dir / "diagnostics" / layout.name
+        if not diag_dir.is_dir():
+            continue
+        cache = ingest_layout_diagnostics_dir(diag_dir, layout=layout, cache=cache)
+    return cache

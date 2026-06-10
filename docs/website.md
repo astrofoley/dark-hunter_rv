@@ -82,7 +82,7 @@ Ensure Apache serves `/var/www/html/darkhunter/rv/` (existing `Alias` or symlink
 | **(M2sin i)/(sin i) (Msun)** | Same f(M) and M1 with Gaia astrometric inclination |
 | **INCLINATION (deg)** | Astrometric i used for M2 at i (from Gaia NSS or derived from Thiele-Innes A,B,F,G when the database field is empty; empty if unknown or edge-on) |
 
-**RV fit plots:** blue shaded regions mark APF visibility at Lick (airmass ≤ 2.5 for ≥15 min after −18° twilight, out to 3 months). Built via `scripts/build_apf_observability_cache.py` and stored in `rv_fit_reports/observability_windows_cache.json`. Circumpolar targets are annotated on the plot.
+**RV fit plots:** blue shaded regions mark the current APF visibility season at Lick (nautical twilight −12°; airmass ≤ 1.7 for ≥30 min within ±30 min of twilight at season boundaries; interior nights when the target is up at all). One window per target, plotted out to 6 months. Built via `scripts/build_apf_observability_cache.py` and stored in `rv_fit_reports/observability_windows_cache.json`. Very high-declination circumpolar targets are annotated without date labels.
 
 ## Three commands (ziggy)
 
