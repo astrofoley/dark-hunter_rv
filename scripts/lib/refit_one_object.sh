@@ -26,6 +26,7 @@ FIT_FORCE="${FIT_FORCE:-1}"
 FIT_JITTER="${FIT_JITTER:-1}"
 PIPELINE_UPDATE="${PIPELINE_UPDATE:-0}"
 RUN_HBETA="${RUN_HBETA:-1}"
+RUN_RV_PLOTS="${RUN_RV_PLOTS:-1}"
 QUERY_GAIA_ONLINE="${QUERY_GAIA_ONLINE:-0}"
 REFIT_PARALLEL_LOG_DIR="${REFIT_PARALLEL_LOG_DIR:-$REPO/logs/refit_parallel}"
 
@@ -114,6 +115,14 @@ if [[ "$FIT_JITTER" == "1" ]]; then
 fi
 if ! "$PY" "${fit_args[@]}"; then
   echo "[WARN] fit failed for Gaia_DR3_${gid} (continuing to website if assets exist)"
+fi
+
+if [[ "$RUN_RV_PLOTS" == "1" ]]; then
+  "$PY" scripts/plot_rv_from_summaries.py \
+    --summary-dir "$OUT" \
+    --plots-root "$OUT" \
+    --star-id "$gid" \
+    || echo "[WARN] RV data plot failed for Gaia_DR3_${gid} (continuing)"
 fi
 
 if [[ "$RUN_HBETA" == "1" ]]; then
