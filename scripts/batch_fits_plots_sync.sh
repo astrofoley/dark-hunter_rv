@@ -151,8 +151,8 @@ else
   echo "=== Keplerian fits (skipped: RUN_FITS=0) ==="
 fi
 
-if [[ "$RUN_RV_PLOTS" == "1" && "$RUN_FITS" != "1" ]]; then
-  echo "=== Summary-based RV data plots (no fits) ==="
+if [[ "$RUN_RV_PLOTS" == "1" ]]; then
+  echo "=== Summary-based RV data plots ==="
   plot_args=(
     scripts/plot_rv_from_summaries.py
     --summary-dir "$OUT"

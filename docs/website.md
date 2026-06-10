@@ -51,7 +51,7 @@ Ensure Apache serves `/var/www/html/darkhunter/rv/` (existing `Alias` or symlink
 
 ## Populate / refresh star assets
 
-`populate_website.sh` runs Keplerian fits (pipeline + literature epochs, excluding legacy sentinels such as −9999 km/s), writes:
+`populate_website.sh` runs Keplerian fits (pipeline + literature epochs, excluding legacy sentinels such as −9999 km/s). The **RV Curve** plot (`*_rv_plot.png`) is always built from the summary via `scripts/plot_rv_from_summaries.py`, including when the Keplerian fit is skipped or fails. Writes:
 
 | File | Description |
 |------|-------------|
@@ -150,6 +150,13 @@ Plots/staging only (no refit):
 ```bash
 WEB_ROOT=/var/www/html/darkhunter/rv RUN_FITS=0 RUN_RV_PLOTS=1 MIN_POINTS=5 \
   bash scripts/populate_website.sh
+```
+
+Audit missing summaries / RV data plots / fits:
+
+```bash
+cd /data2/darkhunter/dark-hunter_rv
+PYTHONPATH=. python3 scripts/audit_pipeline_coverage.py --only-issues
 ```
 
 **Symptoms without a full deploy:** RV thumbnails under **M2 sin i** (stray `<img>` in `data.csv`), correct RV plots only in **RV Curve** (new `script.js`), no **H-beta** (PNGs missing or not built).
