@@ -214,6 +214,16 @@ PYTHONPATH=. python3 scripts/build_hbeta_website_plots.py \
 
 **Missing epochs in summaries:** Cron used to match only `*_ap1.*` / `*.fits`, not `Gaia_DR3_*_epoch_*.txt`. Stars with only epoch `.txt` reductions (e.g. nine epochs on disk but four in `[PIPELINE RESULTS]`) need a one-time **`bash scripts/full_website_refresh.sh`** (`RUN_PIPELINE=1`, default), which runs the pipeline on all epoch files then refits. Incremental cron picks up new epoch `.txt` files after that.
 
+**Spectra on disk but empty GAIA DATA folder:** The catalog table (`data.csv`) was copied from legacy `rv_website_v1`; star assets are built separately from `$REPO/output/Gaia_DR3_*_summary.txt`. Cron runs `pipeline --update`, which **skips** spectra whose diagnostics CSV is newer than the input and does **not** create a summary when every epoch is skipped. After the daily pipeline pass, cron runs `scripts/ensure_pipeline_summaries.py` to backfill missing/incomplete summaries for any `Gaia_DR3_*` tree under `SPEC_ROOT` (all subdirectories). Audit gaps (no matplotlib required):
+
+```bash
+cd /data2/darkhunter/dark-hunter_rv
+PY=/home/marley/anaconda2/envs/gaia-env/bin/python PYTHONPATH=. \
+  python3 scripts/audit_pipeline_coverage.py --only-issues
+```
+
+Use the gaia-env Python on ziggy (base conda lacks matplotlib). One-star backfill: `PY=... python3 scripts/ensure_pipeline_summaries.py --gaia-id <id>`.
+
 Install crontab: run **`crontab -e`** alone (do not put the schedule on the same shell line), then add:
 
 ```cron
