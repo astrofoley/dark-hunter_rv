@@ -7,40 +7,25 @@ import argparse
 import csv
 from pathlib import Path
 
-from darkhunter_rv.rv_keplerian_plots import our_telescope_points
 from darkhunter_rv.summary_paths import (
     count_pipeline_rows,
+    count_valid_pipeline_rv_epochs,
+    discover_primary_epoch_files,
+    discover_spec_gaia_ids,
     discover_summary_files,
     discover_summary_path,
     parse_object_id_from_summary,
 )
 from darkhunter_rv.website_table_csv import gaia_id_from_row
-from fit_apf_rv_keplerian import parse_summary
 
 MIN_RV_PLOT_POINTS = 2
 
 
 def _discover_spectra(spec_root: Path) -> dict[str, int]:
-    """Gaia id -> spectrum file count under SPEC_ROOT."""
+    """Gaia id -> primary epoch spectrum count under SPEC_ROOT (any depth)."""
     counts: dict[str, int] = {}
-    if not spec_root.is_dir():
-        return counts
-    patterns = (
-        "Gaia_DR3_*_epoch_*.txt",
-        "Gaia_DR3_*_*_ap1.flm",
-        "Gaia_DR3_*_*_ap1.txt",
-    )
-    for pat in patterns:
-        for p in spec_root.rglob(pat):
-            if not p.is_file():
-                continue
-            stem = p.name
-            if stem.startswith("Gaia_DR3_"):
-                parts = stem.split("_")
-                if len(parts) >= 3 and parts[1] == "DR3":
-                    gid = parts[2]
-                    if gid.isdigit():
-                        counts[gid] = counts.get(gid, 0) + 1
+    for gid in discover_spec_gaia_ids(spec_root):
+        counts[gid] = len(discover_primary_epoch_files(spec_root, gid))
     return counts
 
 
@@ -76,16 +61,8 @@ def _audit_one(
     summ_flat = out_dir / f"Gaia_DR3_{gid}_summary.txt"
     has_summary = summ is not None and summ.is_file()
     n_rows = count_pipeline_rows(summ) if has_summary and summ else 0
-    n_finite = 0
-    n_plot_points = 0
-    if has_summary and summ:
-        try:
-            parsed = parse_summary(summ)
-            n_finite = len(parsed)
-            n_plot_points = len(our_telescope_points(parsed))
-        except Exception:
-            n_finite = 0
-            n_plot_points = 0
+    n_finite = count_valid_pipeline_rv_epochs(summ) if has_summary and summ else 0
+    n_plot_points = n_finite
 
     fit_json = reports_dir / f"{gid}_keplerian_fit.json"
     fit_png = reports_dir / f"{gid}_keplerian_fit.png"
@@ -103,6 +80,8 @@ def _audit_one(
         issues.append("no_summary")
     elif summ and summ.resolve() != summ_flat.resolve() and not summ_flat.is_file():
         issues.append("summary_nested_only")
+    if has_summary and n_rows < n_spec and n_spec > 0:
+        issues.append(f"summary_incomplete({n_rows}<{n_spec})")
     if has_summary and n_finite < min_points:
         issues.append(f"few_rv_points({n_finite}<{min_points})")
     if has_summary and n_finite >= min_points and not fit_json.is_file():
@@ -115,6 +94,8 @@ def _audit_one(
         issues.append("website_summary_no_rv_plot")
     if web_summ.is_file() and not web_fit.is_file():
         issues.append("website_summary_no_rv_fit")
+    if n_spec > 0 and not web_summ.is_file():
+        issues.append("spectra_not_staged")
 
     return {
         "gaia_id": gid,
@@ -186,14 +167,16 @@ def main() -> int:
 
     n_issue = sum(1 for r in rows if r["issues"])
     n_no_summ = sum(1 for r in rows if "no_summary" in r["issues"])
+    n_not_staged = sum(1 for r in rows if "spectra_not_staged" in r["issues"])
     n_no_rv_plot = sum(
         1
         for r in rows
         if "no_rv_data_plot" in r["issues"] or "website_summary_no_rv_plot" in r["issues"]
     )
     print(
-        f"audit: {len(rows)} stars, {n_issue} with issues, "
-        f"{n_no_summ} missing summary, {n_no_rv_plot} missing RV data plot assets"
+        f"audit: {len(rows)} stars ({len(spec_counts)} with spectra under spec-root), "
+        f"{n_issue} with issues, {n_no_summ} missing summary, "
+        f"{n_not_staged} with spectra not staged, {n_no_rv_plot} missing RV data plot assets"
     )
     print(f"wrote {out_csv}")
     return 0

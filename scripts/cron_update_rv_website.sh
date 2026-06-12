@@ -18,6 +18,9 @@ OUT="${OUT:-$REPO/output}"
 WEB_ROOT="${WEB_ROOT:-/var/www/html/darkhunter/rv}"
 SPEC_ROOT="${SPEC_ROOT:-/data2/gaia_stars/apf_reductions}"
 PY="${PY:-/home/marley/anaconda2/envs/gaia-env/bin/python}"
+if [[ ! -x "$PY" ]]; then
+  PY="${PY_FALLBACK:-python3}"
+fi
 MIN_POINTS="${MIN_POINTS:-5}"
 LOG="${LOG:-$REPO/logs/cron_rv_website.log}"
 RUN_PIPELINE="${RUN_PIPELINE:-1}"
@@ -39,8 +42,14 @@ echo "=== $(date -Is) cron_update_rv_website start (pid $$) ==="
 if [[ "$RUN_PIPELINE" == "1" && -d "$SPEC_ROOT" ]]; then
   echo "=== Pipeline --update on $SPEC_ROOT ==="
   find_apf_spectra_print0 "$SPEC_ROOT" \
-    | xargs -0 -r "$PY" -m darkhunter_rv.pipeline --instrument APF --update --plots --plots-focus 2>/dev/null \
+    | xargs -0 -r "$PY" -m darkhunter_rv.pipeline --instrument APF --update --plots --plots-focus \
     || echo "[WARN] pipeline pass had errors (continuing)"
+
+  echo "=== Ensure summaries for stars with spectra but missing output summaries ==="
+  "$PY" scripts/ensure_pipeline_summaries.py \
+    --spec-root "$SPEC_ROOT" \
+    --output-dir "$OUT" \
+    || echo "[WARN] ensure_pipeline_summaries had errors (continuing)"
 elif [[ "$RUN_PIPELINE" == "1" ]]; then
   echo "[WARN] SPEC_ROOT missing: $SPEC_ROOT"
 fi
