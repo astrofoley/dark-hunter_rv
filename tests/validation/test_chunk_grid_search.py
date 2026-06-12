@@ -8,7 +8,15 @@ from validation.chunk_layout import (
     build_equal_subchunk_layout,
     build_merge_orders_layout,
     default_parametric_grid,
+    load_campaign_layout_by_name,
 )
+
+
+def test_load_campaign_layout_subchunks_8(tmp_path) -> None:
+    lay = load_campaign_layout_by_name("subchunks_8", tmp_path)
+    assert lay is not None
+    assert lay.name == "subchunks_8"
+    assert lay.subchunks == 8
 
 
 def test_build_merge_orders_layout_width_2() -> None:

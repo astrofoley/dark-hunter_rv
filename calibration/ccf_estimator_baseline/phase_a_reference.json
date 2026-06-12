@@ -1,0 +1,22 @@
+{
+  "phase": "A",
+  "estimator": "gauss_offset",
+  "created_utc": "2026-06-07T00:00:00+00:00",
+  "notes": "Seed baseline before CCF estimator study; update after first benchmark run.",
+  "metrics": {
+    "median_sigma_rv_kms": 0.35,
+    "p90_sigma_rv_kms": 0.55,
+    "median_chunk_scatter_kms": 0.28,
+    "bias_curve_rms_kms": 0.12,
+    "stellar_bias_cv_rmse_kms": 0.15,
+    "low_snr_finite_rate": 0.75
+  },
+  "tolerance": {
+    "median_sigma_rv_kms": 0.005,
+    "p90_sigma_rv_kms": 0.008,
+    "median_chunk_scatter_kms": 0.005,
+    "bias_curve_rms_kms": 0.003,
+    "stellar_bias_cv_rmse_kms": 0.003,
+    "low_snr_finite_rate": 0.02
+  }
+}

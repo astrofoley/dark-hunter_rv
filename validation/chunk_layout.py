@@ -147,6 +147,28 @@ def build_equal_subchunk_layout(n: int) -> ChunkLayout:
     )
 
 
+def load_campaign_layout_by_name(name: str, campaign_dir: Path | str) -> ChunkLayout | None:
+    """
+    Resolve a layout by name from campaign layouts/, calibration/chunk_layouts/, or subchunks_N.
+    """
+    campaign_dir = Path(campaign_dir)
+    repo_root = Path(__file__).resolve().parents[1]
+    for base in (
+        campaign_dir / "layouts",
+        repo_root / "calibration" / "chunk_layouts",
+    ):
+        path = base / f"{name}.yaml"
+        if path.is_file():
+            return load_chunk_layout(path)
+    if str(name).startswith("subchunks_"):
+        try:
+            n_sub = int(str(name).split("_", 1)[1])
+            return build_equal_subchunk_layout(n_sub)
+        except (ValueError, IndexError):
+            pass
+    return None
+
+
 def build_custom_edge_layout(name: str, pixel_edges: list[float]) -> ChunkLayout:
     """N chunks from explicit N+1 fractional pixel edges."""
     edges = [float(x) for x in pixel_edges]

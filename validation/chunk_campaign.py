@@ -37,6 +37,7 @@ from validation.chunk_layout import (  # noqa: E402
     build_campaign_broad_grid,
     build_campaign_edge_grid,
     build_custom_edge_layout,
+    load_campaign_layout_by_name,
     save_chunk_layout,
 )
 from validation.chunk_measurement_cache import (  # noqa: E402
@@ -254,7 +255,16 @@ def run_campaign(
 
     if only_layouts:
         want = set(only_layouts)
-        unique_layouts = [lay for lay in unique_layouts if lay.name in want]
+        from_grid = [lay for lay in unique_layouts if lay.name in want]
+        found = {lay.name for lay in from_grid}
+        extras: list[ChunkLayout] = []
+        for name in sorted(want - found):
+            lay = load_campaign_layout_by_name(name, campaign_dir)
+            if lay is not None:
+                extras.append(lay)
+            else:
+                logger.warning("Unknown layout %r (not in grid and no YAML found)", name)
+        unique_layouts = from_grid + extras
         if not unique_layouts:
             logger.error("No layouts matched --only-layouts %s", sorted(want))
             return pd.DataFrame()
