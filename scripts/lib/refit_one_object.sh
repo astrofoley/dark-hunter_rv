@@ -95,6 +95,14 @@ if [[ ! -f "$summ" ]]; then
   exit 1
 fi
 
+echo "=== APF observability window (single star) ==="
+"$PY" scripts/build_apf_observability_cache.py \
+  --data-csv "$DATA_CSV" \
+  --output-dir "$OUT" \
+  --cache "$REPORTS_DIR/observability_windows_cache.json" \
+  --gaia-id "$gid" \
+  || echo "[WARN] observability cache build failed for Gaia_DR3_${gid} (fit will compute inline)"
+
 fit_args=(
   fit_apf_rv_keplerian.py
   --summary "$summ"

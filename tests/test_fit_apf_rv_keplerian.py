@@ -1,5 +1,6 @@
 """Tests for fit_apf_rv_keplerian summary parsing (no network)."""
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -531,6 +532,86 @@ def test_table_m1_overrides_default_and_nss() -> None:
     assert cols_default["m2sin_i_msun"] is not None
     assert cols_table["m2sin_i_msun"] is not None
     assert cols_table["m2sin_i_msun"] != cols_default["m2sin_i_msun"]
+
+
+def test_load_gaia_nss_from_cache_returns_orbit_without_m1(tmp_path: Path) -> None:
+    sid = "77413727493690112"
+    cache = tmp_path / "gaia_nss_cache.json"
+    cache.write_text(
+        json.dumps(
+            {
+                sid: {
+                    "period_days": 1327.5,
+                    "eccentricity": 0.0,
+                }
+            }
+        )
+    )
+    out = fitmod.load_gaia_nss_from_cache(sid, cache)
+    assert out is not None
+    assert out["period_days"] == pytest.approx(1327.5)
+    assert out["eccentricity"] == pytest.approx(0.0)
+
+
+def test_run_one_uses_nss_cache_when_summary_lacks_period(tmp_path: Path) -> None:
+    sid = "77413727493690112"
+    summ = tmp_path / f"Gaia_DR3_{sid}_summary.txt"
+    summ.write_text(
+        "[GAIA METADATA]\nSource_ID: 77413727493690112\nRA: 180.0\nDec: 45.0\n"
+        "NSS_Solution_Type: None\nPeriod: NaN\nEccentricity: NaN\n"
+        "\n[PIPELINE RESULTS]\n# hdr\n"
+        + "\n".join(
+            f"Gaia_DR3_{sid}_epoch_{i}.txt {60500 + i * 30} {-10.0 + 0.5 * i} 0.5 0.4 False"
+            for i in range(12)
+        )
+        + "\n"
+    )
+    reports = tmp_path / "reports"
+    cache = tmp_path / "gaia_nss_cache.json"
+    cache.write_text(json.dumps({sid: {"period_days": 1200.0, "eccentricity": 0.0}}))
+    obs_cache = tmp_path / "observability_windows_cache.json"
+    obs_cache.write_text(
+        json.dumps(
+            {
+                sid: {
+                    "circumpolar": False,
+                    "next_window_start_date": "2026-06-01",
+                    "next_window_end_date": "2026-09-30",
+                    "windows": [
+                        {
+                            "start_date": "2026-06-01",
+                            "end_date": "2026-09-30",
+                            "start_mjd": 61000.0,
+                            "end_mjd": 61120.0,
+                        }
+                    ],
+                }
+            }
+        )
+    )
+    report = fitmod.run_one(
+        summ,
+        reports,
+        min_points=7,
+        max_points=None,
+        m1_msun=1.0,
+        period_min=None,
+        period_max=None,
+        period_prior=None,
+        period_prior_sigma=0.15,
+        fix_period=None,
+        fix_e=None,
+        use_gaia_nss=True,
+        gaia_cache_path=cache,
+        observability_cache_path=obs_cache,
+        query_gaia_online=False,
+        plots_root=tmp_path / "plots",
+        table_m1_msun=None,
+    )
+    assert report is not None
+    assert report.get("nss_priors_source") == "cache"
+    assert len(report.get("fit_variants", {})) == 4
+    assert report.get("observability_window") is not None
 
 
 def test_fix_period_seeded_from_free_fit() -> None:

@@ -9,13 +9,18 @@ website_stage_gaia_plots() {
 
   run_cmd mkdir -p "$dest_dir"
   local name
+  local reports_dir="${REPORTS_DIR:-}"
   for name in \
     "Gaia_DR3_${gid}_28_hbeta.png" \
     "Gaia_DR3_${gid}_rv_plot.png" \
     "Gaia_DR3_${gid}_keplerian_residuals.png"
   do
-    if [[ -f "$src_dir/$name" ]]; then
-      run_cmd cp "$src_dir/$name" "$dest_dir/$name"
+    local src="$src_dir/$name"
+    if [[ ! -f "$src" && "$name" == "Gaia_DR3_${gid}_keplerian_residuals.png" && -n "$reports_dir" ]]; then
+      src="$reports_dir/${gid}_keplerian_residuals.png"
+    fi
+    if [[ -f "$src" ]]; then
+      run_cmd cp "$src" "$dest_dir/$name"
       n=$((n + 1))
     fi
   done
