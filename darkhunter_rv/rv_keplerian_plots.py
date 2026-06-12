@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from fit_apf_rv_keplerian import RVPoint
 
+from darkhunter_rv.apf_observability import PLOT_HORIZON_DAYS
 from darkhunter_rv.rv_point_filters import rv_value_is_valid
 
 
@@ -93,10 +94,12 @@ def _xlim_from_data(t: np.ndarray, report: dict) -> Tuple[float, float]:
     t_hi = float(np.max(t) + pad)
     t_lo = min(t_lo, now_mjd - 0.01 * t_span)
     t_hi = max(t_hi, now_mjd + 0.01 * t_span)
+    plot_cap_mjd = now_mjd + float(PLOT_HORIZON_DAYS)
     obs_start, obs_end, _ = _observability_span(report)
     if obs_start is not None and obs_end is not None:
         t_lo = min(t_lo, obs_start - 0.01 * t_span)
-        t_hi = max(t_hi, obs_end + 0.01 * t_span)
+        t_hi = max(t_hi, min(obs_end + 0.01 * t_span, plot_cap_mjd))
+    t_hi = min(t_hi, plot_cap_mjd)
     return t_lo, t_hi
 
 
@@ -164,7 +167,7 @@ def _shade_apf_window(
     if not windows:
         return
     now_mjd = float(report.get("now_mjd", Time.now().mjd))
-    plot_cap_mjd = now_mjd + 183.0
+    plot_cap_mjd = now_mjd + float(PLOT_HORIZON_DAYS)
     label_parts: List[str] = []
     for w in windows:
         try:
