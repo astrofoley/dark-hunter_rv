@@ -13,6 +13,11 @@ _PRIMARY_EPOCH_NAME = re.compile(r"^Gaia_DR3_(\d+)_epoch_\d+\.txt$")
 _GAIA_DIR_NAME = re.compile(r"^Gaia_DR3_(\d+)$")
 
 
+def is_primary_epoch_spectrum_name(filename: str) -> bool:
+    """True for full-epoch Gaia_DR3_*_epoch_<N>.txt files (not *_order_* extracts)."""
+    return bool(_PRIMARY_EPOCH_NAME.match(Path(filename).name))
+
+
 def parse_object_id_from_summary(path: Path) -> Optional[str]:
     m = re.search(r"Gaia_DR3_(\d{18,19})", f"{path.parent.name}/{path.stem}")
     if m:
@@ -40,7 +45,7 @@ def discover_spec_gaia_ids(spec_root: Path) -> Set[str]:
     if not spec_root.is_dir():
         return ids
     for path in spec_root.rglob("Gaia_DR3_*_epoch_*.txt"):
-        if not path.is_file() or "_order_" in path.name:
+        if not path.is_file() or not is_primary_epoch_spectrum_name(path.name):
             continue
         match = _PRIMARY_EPOCH_NAME.match(path.name)
         if match:
@@ -61,9 +66,7 @@ def discover_primary_epoch_files(spec_root: Path, gaia_source_id: str) -> list[P
         return []
     out: list[Path] = []
     for path in spec_root.rglob(f"Gaia_DR3_{sid}_epoch_*.txt"):
-        if not path.is_file() or "_order_" in path.name:
-            continue
-        if _PRIMARY_EPOCH_NAME.match(path.name):
+        if path.is_file() and is_primary_epoch_spectrum_name(path.name):
             out.append(path)
     return sorted(out, key=lambda p: p.name)
 

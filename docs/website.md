@@ -209,7 +209,7 @@ PYTHONPATH=. python3 scripts/build_hbeta_website_plots.py \
 
 `scripts/cron_update_rv_website.sh` runs:
 
-1. **Pipeline** `--update` on `SPEC_ROOT` for `Gaia_DR3_*_epoch_*.txt`, `*_ap1.{flm,txt}`, and `*.fits` (skips spectra whose `*_diagnostics.csv` is newer than the input).
+1. **Pipeline** `--update` on `SPEC_ROOT` for full-epoch `Gaia_DR3_*_epoch_<N>.txt` (not `*_order_*` Hβ extracts), `*_ap1.{flm,txt}`, and `*.fits` (skips spectra whose `*_diagnostics.csv` is newer than the input).
 2. **Populate**: Keplerian fits (≥`MIN_POINTS`, literature included, bad RVs filtered), RV/Hβ plots, `data.csv` mass columns, staging to `WEB_ROOT`. Skips refit when the JSON is newer than the summary (`FIT_FORCE=0`).
 
 **Missing epochs in summaries:** Cron used to match only `*_ap1.*` / `*.fits`, not `Gaia_DR3_*_epoch_*.txt`. Stars with only epoch `.txt` reductions (e.g. nine epochs on disk but four in `[PIPELINE RESULTS]`) need a one-time **`bash scripts/full_website_refresh.sh`** (`RUN_PIPELINE=1`, default), which runs the pipeline on all epoch files then refits. Incremental cron picks up new epoch `.txt` files after that.
