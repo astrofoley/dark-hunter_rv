@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from . import config, instruments, io_utils, continuum, rv_core, templates, chunking, plotting, qc
+from darkhunter_rv.summary_paths import is_primary_epoch_spectrum_name
 
 logger = logging.getLogger(__name__)
 
@@ -1706,6 +1707,14 @@ def main(argv: list[str] | None = None) -> None:
             return False
 
     for fn in args.input_file:
+        fn_path = Path(str(fn))
+        if (
+            fn_path.suffix.lower() == ".txt"
+            and "_epoch_" in fn_path.name
+            and not is_primary_epoch_spectrum_name(fn_path.name)
+        ):
+            logger.info("Skipping per-order spectrum extract: %s", fn)
+            continue
         if _skip_update(str(fn)):
             logger.info("Skipping (up to date): %s", fn)
             continue

@@ -77,7 +77,7 @@ while IFS= read -r f; do
   [[ -n "$f" ]] && SPEC_FILES+=("$f")
 done < <(
   find "$SPEC_ROOT" -type f \( \
-    -name "Gaia_DR3_${STAR_ID}_epoch_*.txt" -o \
+    \( -name "Gaia_DR3_${STAR_ID}_epoch_*.txt" ! -name '*_order_*' \) -o \
     -name "Gaia_DR3_${STAR_ID}_*_ap1.flm" -o \
     -name "Gaia_DR3_${STAR_ID}_*_ap1.txt" \
   \) 2>/dev/null | sort
