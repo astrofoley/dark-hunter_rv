@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 from pathlib import Path
 
 import matplotlib
@@ -15,7 +14,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from darkhunter_rv import continuum, io_utils, rv_core
-from fit_apf_rv_keplerian import discover_summary_files, parse_object_id_from_summary
+from darkhunter_rv.summary_paths import (
+    discover_summary_files,
+    discover_summary_path,
+    is_primary_epoch_spectrum_name,
+    parse_object_id_from_summary,
+)
 
 
 def _epoch_rows(summary_path: Path) -> list[tuple[float, str]]:
@@ -52,17 +56,36 @@ def _parse_teff_from_summary(summary_path: Path) -> float:
     return 5500.0
 
 
-def _find_spectrum(basename: str, roots: list[Path]) -> Path | None:
-    name = Path(basename).name
+def _find_spectrum(file_ref: str, roots: list[Path], *, gaia_id: str | None = None) -> Path | None:
+    ref = Path(file_ref)
+    try:
+        if ref.is_file():
+            return ref.resolve()
+    except OSError:
+        pass
+
+    name = ref.name
+    if not is_primary_epoch_spectrum_name(name):
+        return None
+
     for root in roots:
         if not root.is_dir():
             continue
+        if gaia_id:
+            preferred = root / f"Gaia_DR3_{gaia_id}" / name
+            if preferred.is_file():
+                return preferred
         direct = root / name
         if direct.is_file():
             return direct
         hits = sorted(root.rglob(name))
-        if hits:
-            return hits[0]
+        if not hits:
+            continue
+        if gaia_id:
+            for hit in hits:
+                if f"Gaia_DR3_{gaia_id}" in hit.as_posix():
+                    return hit
+        return hits[0]
     return None
 
 
@@ -113,11 +136,14 @@ def build_overlay(
     summary_path: Path,
     spec_roots: list[Path],
     out_png: Path,
+    *,
+    gaia_id: str | None = None,
 ) -> bool:
     teff = _parse_teff_from_summary(summary_path)
+    sid = gaia_id or parse_object_id_from_summary(summary_path)
     curves: list[tuple[float, np.ndarray, np.ndarray]] = []
     for mjd, bn in epochs:
-        spec = _find_spectrum(bn, spec_roots)
+        spec = _find_spectrum(bn, spec_roots, gaia_id=sid)
         if spec is None:
             continue
         prof = _hbeta_profile_from_spectrum(spec, teff)
@@ -189,7 +215,9 @@ def main() -> int:
         spec_roots = [Path(env_root), summary_dir, summary_dir.parent]
 
     if args.star_id:
-        summaries = [summary_dir / f"Gaia_DR3_{args.star_id}_summary.txt"]
+        sid = str(args.star_id).strip()
+        summ = discover_summary_path(summary_dir, sid)
+        summaries = [summ] if summ is not None else []
     else:
         summaries = discover_summary_files(summary_dir)
 
@@ -206,10 +234,12 @@ def main() -> int:
         plot_dir = plots_root / f"Gaia_DR3_{sid}"
         out_png = plot_dir / f"Gaia_DR3_{sid}_28_hbeta.png"
         epochs = _epoch_rows(summ)
-        if build_overlay(epochs, summ, spec_roots, out_png):
+        if build_overlay(epochs, summ, spec_roots, out_png, gaia_id=sid):
             built += 1
+            print(f"Built Hβ overlay for Gaia_DR3_{sid} -> {out_png}")
         else:
             skipped += 1
+            print(f"[WARN] Hβ overlay skipped for Gaia_DR3_{sid} (epochs={len(epochs)}, spec_roots={spec_roots})")
     print(f"Built {built} Hβ overlay plots (skipped {skipped}).")
     return 0
 

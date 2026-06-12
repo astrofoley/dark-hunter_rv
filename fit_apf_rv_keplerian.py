@@ -172,6 +172,49 @@ def _load_json_cache(path: Path) -> Dict[str, Any]:
         return {}
 
 
+def load_gaia_nss_from_cache(source_id: Optional[str], cache_path: Optional[Path]) -> Optional[Dict[str, float]]:
+    """Offline NSS period/eccentricity from gaia_nss_cache.json (no network)."""
+    if source_id is None or cache_path is None or not cache_path.exists():
+        return None
+    val = _load_json_cache(cache_path).get(str(source_id))
+    if not isinstance(val, dict) or val.get("_none"):
+        return None
+    p = val.get("period_days")
+    e = val.get("eccentricity")
+    if p is None or e is None:
+        return None
+    try:
+        p_f = float(p)
+        e_f = float(e)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(p_f) or not np.isfinite(e_f):
+        return None
+    if p_f <= 0 or e_f < 0 or e_f >= 1:
+        return None
+    return val
+
+
+def resolve_observability_window(
+    summary_path: Path,
+    source_id: Optional[str],
+    cache_path: Optional[Path],
+) -> Optional[Dict[str, Any]]:
+    """APF shading window: cache first, then compute from summary coordinates."""
+    obs = load_observability_window(source_id, cache_path)
+    if obs is not None:
+        return obs
+    try:
+        from darkhunter_rv.apf_observability import observability_for_summary
+
+        row = observability_for_summary(summary_path)
+        if row is None:
+            return None
+        return {k: v for k, v in row.items() if k != "gaia_source_id"}
+    except Exception:
+        return None
+
+
 def load_observability_window(source_id: Optional[str], cache_path: Optional[Path]) -> Optional[Dict[str, Any]]:
     if source_id is None or cache_path is None or (not cache_path.exists()):
         return None
@@ -302,10 +345,10 @@ def fetch_gaia_nss_orbit(source_id: str, cache_path: Optional[Path] = None) -> O
             val = cache[source_id]
             if isinstance(val, dict) and val.get("_none"):
                 return None
-            # If cache already has M1, trust it. Otherwise re-query to enrich/update.
-            if isinstance(val, dict) and val.get("m1_msun") is not None:
-                return val
-            # For cached None or dict without masses, continue and re-query.
+            cached = load_gaia_nss_from_cache(source_id, cache_path)
+            if cached is not None:
+                return cached
+            # Cached entry without usable orbit priors — re-query when allowed.
 
     try:
         from astroquery.gaia import Gaia  # type: ignore
@@ -1856,10 +1899,14 @@ def run_one(
         gaia_nss = load_nss_priors_from_summary(summary_path)
         if gaia_nss is not None:
             nss_source = "summary"
-        elif query_gaia_online and gaia_source_id is not None:
-            gaia_nss = fetch_gaia_nss_orbit(gaia_source_id, cache_path=gaia_cache_path)
+        elif gaia_source_id is not None:
+            gaia_nss = load_gaia_nss_from_cache(gaia_source_id, gaia_cache_path)
             if gaia_nss is not None:
-                nss_source = "online"
+                nss_source = "cache"
+            elif query_gaia_online:
+                gaia_nss = fetch_gaia_nss_orbit(gaia_source_id, cache_path=gaia_cache_path)
+                if gaia_nss is not None:
+                    nss_source = "online"
 
     fit_m1_msun = _finite_mass_value(table_m1_msun)
     if fit_m1_msun is None:
@@ -1910,7 +1957,9 @@ def run_one(
     report["gaia_source_id"] = gaia_source_id
     report["gaia_nss"] = gaia_nss
     report["nss_priors_source"] = nss_source
-    report["observability_window"] = load_observability_window(gaia_source_id, observability_cache_path)
+    report["observability_window"] = resolve_observability_window(
+        summary_path, gaia_source_id, observability_cache_path
+    )
     report["fit_variants"] = {k: copy.deepcopy(v[1]) for k, v in fit_variants.items()}
     report["params_by_variant"] = {k: np.asarray(v[0], dtype=float).tolist() for k, v in fit_variants.items()}
 
