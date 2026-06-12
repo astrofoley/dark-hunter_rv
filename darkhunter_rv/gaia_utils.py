@@ -7,7 +7,28 @@ from pathlib import Path
 import numpy as np
 from astropy.time import Time
 from . import config
+from .apogee_rv_query import APOGEE_TELESCOPE_PREFIX, query_apogee_rvs_for_gaia_ids
+from .desi_rv_query import DESI_TELESCOPE_PREFIX, query_desi_rvs_for_gaia_ids
+from .galah_rv_query import GALAH_TELESCOPE_PREFIX, query_galah_rvs_for_gaia_ids
+from .ges_rv_query import GES_TELESCOPE_PREFIX, query_ges_rvs_for_gaia_ids
+from .rv_frame import (
+    EXTERNAL_RV_HEADER_COMMENT,
+    NativeFrame,
+    finalize_external_rv_record,
+    mjd_from_rave_obs_id,
+)
+from .rv_point_filters import mjd_is_valid
 from .thiele_innes_inclination import fill_inclination_in_metadata
+
+EXTERNAL_CATALOG_PREFIXES: tuple[str, ...] = (
+    "LAMOST_LRS",
+    "LAMOST_MRS",
+    "RAVE_DR6",
+    DESI_TELESCOPE_PREFIX,
+    GALAH_TELESCOPE_PREFIX,
+    APOGEE_TELESCOPE_PREFIX,
+    GES_TELESCOPE_PREFIX,
+)
 
 def _gaia_class():
     """Lazy import: avoids astroquery's noisy archive banner when only reading summaries from disk."""
@@ -91,7 +112,28 @@ def query_gaia_data(source_id):
     if not ext_rows:
         ext_rows = _query_external_rvs_sequential(prop_args)
 
-    return process_query_results(main_rows, ext_rows)
+    result = process_query_results(main_rows, ext_rows)
+    meta = result.get("metadata") or {}
+    ra = meta.get("RA")
+    dec = meta.get("Dec")
+    positions = None
+    try:
+        if ra is not None and dec is not None and np.isfinite(float(ra)) and np.isfinite(float(dec)):
+            positions = {int(source_id): (float(ra), float(dec))}
+    except (TypeError, ValueError):
+        positions = None
+    sid = int(source_id)
+    desi_rows = query_desi_rvs_for_gaia_ids([sid], positions_by_id=positions).get(sid, [])
+    galah_rows = query_galah_rvs_for_gaia_ids([sid], positions_by_id=positions).get(sid, [])
+    apogee_rows = query_apogee_rvs_for_gaia_ids([sid], positions_by_id=positions).get(sid, [])
+    result["external_rvs"] = merge_external_rv_lists(result.get("external_rvs", []), desi_rows)
+    result["external_rvs"] = merge_external_rv_lists(
+        result["external_rvs"], galah_rows, replace_prefixes=(GALAH_TELESCOPE_PREFIX,)
+    )
+    result["external_rvs"] = merge_external_rv_lists(
+        result["external_rvs"], apogee_rows, replace_prefixes=(APOGEE_TELESCOPE_PREFIX,)
+    )
+    return result
 
 
 def _query_external_rvs_combined(prop_args: str) -> list:
@@ -265,11 +307,20 @@ def process_query_results(main_rows, unified_external_rows):
 
     fill_inclination_in_metadata(metadata)
 
-    external_rvs = _external_rvs_from_unified_rows(unified_external_rows)
+    ra_meta = metadata.get("RA")
+    dec_meta = metadata.get("Dec")
+    external_rvs = _external_rvs_from_unified_rows(
+        unified_external_rows, ra_deg=ra_meta, dec_deg=dec_meta
+    )
     return {"metadata": metadata, "external_rvs": external_rvs}
 
 
-def _external_rvs_from_unified_rows(rows: list) -> list:
+def _external_rvs_from_unified_rows(
+    rows: list,
+    *,
+    ra_deg: float | None = None,
+    dec_deg: float | None = None,
+) -> list:
     external_rvs = []
     for r in rows:
         cat = str(r.get("ext_cat", "") or "")
@@ -292,9 +343,21 @@ def _external_rvs_from_unified_rows(rows: list) -> list:
                         t = Time(str(obs_str).strip(), format="isot", scale="utc").mjd
                     except Exception:
                         t = 0.0
-                external_rvs.append(
-                    {"telescope": "LAMOST_LRS", "mjd": t, "rv": rv, "rv_err": err, "flag": "z_meas"}
+                rec = finalize_external_rv_record(
+                    {
+                        "telescope": "LAMOST_LRS",
+                        "mjd": t,
+                        "rv": rv,
+                        "rv_err": err,
+                        "flag": "z_meas",
+                    },
+                    ra_deg=ra_deg,
+                    dec_deg=dec_deg,
+                    native_frame=NativeFrame.HELIOCENTRIC,
+                    site_key="LAMOST",
                 )
+                if rec is not None:
+                    external_rvs.append(rec)
         elif cat == "LAMOST_MRS":
             rv = float(z) if z is not None and np.isfinite(float(z)) else np.nan
             if np.isfinite(rv):
@@ -309,15 +372,21 @@ def _external_rvs_from_unified_rows(rows: list) -> list:
                     if z_err is not None and np.isfinite(float(z_err))
                     else 0.0
                 )
-                external_rvs.append(
+                rec = finalize_external_rv_record(
                     {
                         "telescope": "LAMOST_MRS",
                         "mjd": t,
                         "rv": rv,
                         "rv_err": err,
                         "flag": flag,
-                    }
+                    },
+                    ra_deg=ra_deg,
+                    dec_deg=dec_deg,
+                    native_frame=NativeFrame.BARYCENTRIC,
+                    site_key="LAMOST",
                 )
+                if rec is not None:
+                    external_rvs.append(rec)
         elif cat == "RAVE_DR6":
             rv = float(z) if z is not None and np.isfinite(float(z)) else np.nan
             if np.isfinite(rv):
@@ -326,15 +395,24 @@ def _external_rvs_from_unified_rows(rows: list) -> list:
                     if z_err is not None and np.isfinite(float(z_err))
                     else 0.0
                 )
-                external_rvs.append(
+                t = mjd_from_rave_obs_id(flag)
+                if not mjd_is_valid(t):
+                    continue
+                rec = finalize_external_rv_record(
                     {
                         "telescope": "RAVE_DR6",
-                        "mjd": 0.0,
+                        "mjd": t,
                         "rv": rv,
                         "rv_err": err,
                         "flag": flag,
-                    }
+                    },
+                    ra_deg=ra_deg,
+                    dec_deg=dec_deg,
+                    native_frame=NativeFrame.HELIOCENTRIC,
+                    site_key="RAVE",
                 )
+                if rec is not None:
+                    external_rvs.append(rec)
     return external_rvs
 
 
@@ -433,6 +511,60 @@ def parse_gaia_metadata_from_star_summary(path) -> dict | None:
             meta[k] = _parse_scalar(v)
         i += 1
     return meta if meta else None
+
+
+def is_desi_external_telescope(name: str) -> bool:
+    return str(name or "").startswith("DESI_")
+
+
+def format_external_rv_line(ext: dict) -> str:
+    flag = str(ext.get("flag", "") or "").strip()
+    base = (
+        f"{ext['telescope']} {float(ext['mjd']):.5f} "
+        f"{float(ext['rv']):.3f} {float(ext['rv_err']):.3f}"
+    )
+    return f"{base} {flag}".rstrip()
+
+
+def merge_external_rv_lists(
+    existing: list,
+    new_rows: list,
+    *,
+    replace_prefixes: tuple[str, ...] = (DESI_TELESCOPE_PREFIX,),
+) -> list:
+    """Drop rows whose telescope matches a replace prefix, then append new_rows."""
+    kept: list = []
+    for row in existing:
+        tele = str(row.get("telescope", "") or "")
+        if any(tele.startswith(p) for p in replace_prefixes):
+            continue
+        kept.append(row)
+    kept.extend(new_rows)
+    kept.sort(key=lambda r: (float(r.get("mjd", 0.0)), str(r.get("telescope", ""))))
+    return kept
+
+
+def replace_external_rv_section_in_summary(path: Path, external_rvs: list) -> None:
+    """Rewrite [EXTERNAL RV DATA] in a star summary, preserving other sections."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    marker = "[EXTERNAL RV DATA]"
+    if marker not in text:
+        raise ValueError(f"{path}: missing {marker}")
+    start = text.index(marker)
+    rest = text[start + len(marker) :]
+    end = len(text)
+    for off, ch in enumerate(rest):
+        if ch == "\n" and off + 1 < len(rest) and rest[off + 1] == "[":
+            end = start + len(marker) + off + 1
+            break
+    lines = [marker, EXTERNAL_RV_HEADER_COMMENT]
+    if external_rvs:
+        for ext in external_rvs:
+            lines.append(format_external_rv_line(ext))
+    else:
+        lines.append("# No external data found.")
+    new_block = "\n".join(lines) + "\n"
+    path.write_text(text[:start] + new_block + text[end:], encoding="utf-8")
 
 
 def parse_external_rvs_from_star_summary(path) -> list:
@@ -566,14 +698,111 @@ def _propagation_args_from_disk_metadata(meta: dict) -> str | None:
     return f"{ra}, {dec}, {plx}, {pmra}, {pmdec}, {rv}, 2016.0, 2000.0"
 
 
-def query_external_rvs_only_from_disk_metadata(metadata: dict) -> list:
+def _query_lamost_rave_from_metadata(metadata: dict) -> list:
     prop = _propagation_args_from_disk_metadata(metadata)
     if prop is None:
         return []
     rows = _query_external_rvs_combined(prop)
     if not rows:
         rows = _query_external_rvs_sequential(prop)
-    return _external_rvs_from_unified_rows(rows)
+    meta = normalize_parsed_star_metadata(metadata)
+    return _external_rvs_from_unified_rows(
+        rows, ra_deg=meta.get("RA"), dec_deg=meta.get("Dec")
+    )
+
+
+def query_external_rvs_only_from_disk_metadata(metadata: dict) -> list:
+    """LAMOST + RAVE via Gaia archive TAP (cone on propagated position)."""
+    return _query_lamost_rave_from_metadata(metadata)
+
+
+def _positions_from_metadata(metadata: dict | None, sid: int) -> dict[int, tuple[float, float]] | None:
+    if metadata is None:
+        return None
+    m = normalize_parsed_star_metadata(metadata)
+    try:
+        ra = float(m.get("RA"))
+        dec = float(m.get("Dec"))
+        if np.isfinite(ra) and np.isfinite(dec):
+            return {sid: (ra, dec)}
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def query_external_rvs_for_source(
+    source_id: int | None,
+    metadata: dict | None,
+    *,
+    sources: tuple[str, ...] | None = None,
+) -> list:
+    """External RV rows for one Gaia source (LAMOST, RAVE, DESI, GALAH, APOGEE, GES)."""
+    enabled = set(sources) if sources else {
+        "lamost",
+        "rave",
+        "desi",
+        "galah",
+        "apogee",
+        "ges",
+    }
+    rows: list = []
+    if metadata and ("lamost" in enabled or "rave" in enabled):
+        rows.extend(_query_lamost_rave_from_metadata(metadata))
+    if source_id is not None:
+        try:
+            sid = int(source_id)
+        except (TypeError, ValueError):
+            sid = 0
+        if sid > 0:
+            positions = _positions_from_metadata(metadata, sid)
+            if "desi" in enabled:
+                desi_rows = query_desi_rvs_for_gaia_ids([sid], positions_by_id=positions).get(sid, [])
+                rows = merge_external_rv_lists(rows, desi_rows, replace_prefixes=(DESI_TELESCOPE_PREFIX,))
+            if "galah" in enabled:
+                galah_rows = query_galah_rvs_for_gaia_ids([sid], positions_by_id=positions).get(sid, [])
+                rows = merge_external_rv_lists(rows, galah_rows, replace_prefixes=(GALAH_TELESCOPE_PREFIX,))
+            if "apogee" in enabled:
+                apogee_rows = query_apogee_rvs_for_gaia_ids([sid], positions_by_id=positions).get(sid, [])
+                rows = merge_external_rv_lists(rows, apogee_rows, replace_prefixes=(APOGEE_TELESCOPE_PREFIX,))
+            if "ges" in enabled:
+                ges_rows = query_ges_rvs_for_gaia_ids([sid], positions_by_id=positions).get(sid, [])
+                rows = merge_external_rv_lists(rows, ges_rows, replace_prefixes=(GES_TELESCOPE_PREFIX,))
+    return rows
+
+
+def update_summary_desi_external_rvs(summary_path: Path, *, source_id: int | None = None) -> int:
+    """Query DESI and patch [EXTERNAL RV DATA] in one summary. Returns number of DESI rows written."""
+    summary_path = Path(summary_path)
+    meta = parse_gaia_metadata_from_star_summary(summary_path)
+    if meta is None:
+        return 0
+    meta = normalize_parsed_star_metadata(meta)
+    sid = source_id
+    if sid is None:
+        try:
+            sid = int(meta.get("Source_ID", 0))
+        except (TypeError, ValueError):
+            sid = 0
+    if not sid:
+        return 0
+    positions = None
+    try:
+        ra = float(meta.get("RA"))
+        dec = float(meta.get("Dec"))
+        if np.isfinite(ra) and np.isfinite(dec):
+            positions = {int(sid): (ra, dec)}
+    except (TypeError, ValueError):
+        positions = None
+    if positions is None:
+        logging.warning(
+            "Gaia_DR3_%s: no RA/Dec in summary; DESI lookup uses source_id only",
+            sid,
+        )
+    desi_rows = query_desi_rvs_for_gaia_ids([int(sid)], positions_by_id=positions).get(int(sid), [])
+    existing = parse_external_rvs_from_star_summary(summary_path)
+    merged = merge_external_rv_lists(existing, desi_rows)
+    replace_external_rv_section_in_summary(summary_path, merged)
+    return len(desi_rows)
 
 
 def load_gaia_data_from_star_summary(path, expected_source_id: int | None = None) -> dict | None:

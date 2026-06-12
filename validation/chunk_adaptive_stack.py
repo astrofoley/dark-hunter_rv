@@ -68,6 +68,7 @@ PER_ORDER_LAYOUTS = (
     "subchunks_2",
     "subchunks_3",
     "subchunks_4",
+    "subchunks_8",
     "n3_red_heavy",
     "n3_blue_heavy",
 )

@@ -168,15 +168,37 @@ def lookup_chunk_bias(
     chunk_key: str,
     per_object: pd.DataFrame,
     fallback: pd.DataFrame,
+    *,
+    layout_name: str | None = None,
 ) -> tuple[float, str]:
-    """Return debias correction (km/s) and source label."""
+    """Return debias correction (km/s) and source label.
+
+    When ``layout_name`` is set and bias tables include a ``layout_name`` column,
+    lookup uses ``(layout_name, chunk_key)`` first (required for mixed-layout stacks).
+    Falls back to ``chunk_key``-only rows for single-layout pipeline tables.
+    """
+    if layout_name and len(per_object) and "layout_name" in per_object.columns:
+        po = per_object[
+            (per_object["gaia_dr3_id"] == str(gaia_id))
+            & (per_object["layout_name"].astype(str) == str(layout_name))
+            & (per_object["chunk_key"].astype(str) == str(chunk_key))
+        ]
+        if len(po):
+            return float(po.iloc[0]["weighted_mean_residual_kms"]), "object"
+    if layout_name and len(fallback) and "layout_name" in fallback.columns:
+        fb = fallback[
+            (fallback["layout_name"].astype(str) == str(layout_name))
+            & (fallback["chunk_key"].astype(str) == str(chunk_key))
+        ]
+        if len(fb) and np.isfinite(fb.iloc[0]["bias_kms"]):
+            return float(fb.iloc[0]["bias_kms"]), "sample_fallback"
     po = per_object[
         (per_object["gaia_dr3_id"] == str(gaia_id))
-        & (per_object["chunk_key"] == str(chunk_key))
+        & (per_object["chunk_key"].astype(str) == str(chunk_key))
     ]
     if len(po):
         return float(po.iloc[0]["weighted_mean_residual_kms"]), "object"
-    fb = fallback[fallback["chunk_key"] == str(chunk_key)]
+    fb = fallback[fallback["chunk_key"].astype(str) == str(chunk_key)]
     if len(fb) and np.isfinite(fb.iloc[0]["bias_kms"]):
         return float(fb.iloc[0]["bias_kms"]), "sample_fallback"
     return float("nan"), "missing"
@@ -210,11 +232,17 @@ def _chunk_weight(
     fallback: pd.DataFrame,
 ) -> tuple[float, float, float, str] | None:
     """Per-chunk debiased RV and IVW weight using this spectrum's stat error."""
+    layout_name = (
+        str(row["layout_name"])
+        if "layout_name" in row.index and pd.notna(row.get("layout_name"))
+        else None
+    )
     bias, src = lookup_chunk_bias(
         str(row["gaia_dr3_id"]),
         str(row["chunk_key"]),
         per_object,
         fallback,
+        layout_name=layout_name,
     )
     if not np.isfinite(bias):
         return None

@@ -1,0 +1,24 @@
+{
+  "phase": "C",
+  "estimator": "gauss_offset",
+  "created_utc": "2026-06-10T01:47:43.390657+00:00",
+  "metrics": {
+    "n_chunks": 19029.0,
+    "n_exposures": 114.0,
+    "median_sigma_rv_kms": 0.00868617693145017,
+    "p90_sigma_rv_kms": 0.01224242767012426,
+    "median_chunk_scatter_kms": 18.900525093859784,
+    "low_snr_finite_rate": 1.0,
+    "bias_curve_rms_kms": 20.304570455370044,
+    "stellar_bias_cv_rmse_kms": 21.998628639341902
+  },
+  "tolerance": {
+    "median_sigma_rv_kms": 0.005,
+    "p90_sigma_rv_kms": 0.008,
+    "median_chunk_scatter_kms": 0.005,
+    "bias_curve_rms_kms": 0.003,
+    "stellar_bias_cv_rmse_kms": 0.003,
+    "low_snr_finite_rate": 0.02
+  },
+  "notes": "Measured from chunk-campaign 114 spectra (2026-06-09 Phase C run)"
+}
