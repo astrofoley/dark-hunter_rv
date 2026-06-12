@@ -34,6 +34,7 @@ import numpy as np
 from astropy.timeseries import LombScargle
 from astropy.time import Time
 
+from darkhunter_rv.apf_observability import PLOT_HORIZON_DAYS
 from darkhunter_rv.summary_paths import (
     count_pipeline_rows,
     discover_summary_files,
@@ -1533,12 +1534,13 @@ def build_plot(
             obs_start = None
             obs_end = None
 
+    plot_cap_mjd = now_mjd + float(PLOT_HORIZON_DAYS)
     t_start = float(np.min(t) - 0.02 * (np.ptp(t) + 1))
     # Extend through nearest upcoming extrema and observability window if available.
     t_end_candidates = [np.max(t) + 0.02 * (np.ptp(t) + 1), now_mjd, next_event]
     if obs_end is not None:
-        t_end_candidates.append(obs_end)
-    t_end = float(max(t_end_candidates))
+        t_end_candidates.append(min(obs_end, plot_cap_mjd))
+    t_end = float(min(max(t_end_candidates), plot_cap_mjd))
     t_dense = np.linspace(t_start, t_end, 2000)
     y_dense = rv_model(params, t_dense, t_ref)
     # Lock y-limits from RV data + fitted curve only (ignore large error bars).
@@ -1558,7 +1560,7 @@ def build_plot(
     if obs_start is not None and obs_end is not None and isinstance(obs_win, dict):
         try:
             left = max(t_start, obs_start)
-            right = min(t_end, obs_end)
+            right = min(t_end, obs_end, plot_cap_mjd)
             if right > left:
                 ax.axvspan(left, right, color="tab:blue", alpha=0.12, zorder=0)
                 ax.text(
