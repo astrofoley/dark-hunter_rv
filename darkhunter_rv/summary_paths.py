@@ -13,6 +13,11 @@ _PRIMARY_EPOCH_NAME = re.compile(r"^Gaia_DR3_(\d+)_epoch_\d+\.txt$")
 _GAIA_DIR_NAME = re.compile(r"^Gaia_DR3_(\d+)$")
 
 
+def is_primary_epoch_spectrum_name(filename: str) -> bool:
+    """True for full-epoch Gaia_DR3_*_epoch_<N>.txt files (not *_order_* extracts)."""
+    return bool(_PRIMARY_EPOCH_NAME.match(Path(filename).name))
+
+
 def parse_object_id_from_summary(path: Path) -> Optional[str]:
     m = re.search(r"Gaia_DR3_(\d{18,19})", f"{path.parent.name}/{path.stem}")
     if m:
