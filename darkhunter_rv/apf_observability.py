@@ -14,6 +14,7 @@ from astropy.time import Time
 
 from darkhunter_rv.gaia_utils import parse_gaia_metadata_from_star_summary
 from darkhunter_rv.lick_twilight_cache import (
+    LICK_TZ,
     default_cache_path as default_lick_twilight_cache_path,
     interpolate_lst_deg,
     nights_in_mjd_range,
@@ -32,6 +33,24 @@ SCAN_HORIZON_DAYS = 365
 PLOT_HORIZON_DAYS = 90
 HORIZON_DAYS = SCAN_HORIZON_DAYS
 MERGE_RUN_GAP_DAYS = 45
+
+
+def reference_now(reference_mjd: Optional[float] = None) -> Tuple[float, str]:
+    """Return (today_mjd, Lick-local calendar date) for the reference instant (now by default)."""
+    mjd = float(Time.now().mjd) if reference_mjd is None else float(reference_mjd)
+    today_iso = Time(mjd, format="mjd").to_datetime(timezone=LICK_TZ).date().isoformat()
+    return mjd, today_iso
+
+
+def lick_twilight_cache_for_observability(
+    observability_cache_path: Optional[Path] = None,
+) -> Path:
+    """Resolve Lick twilight JSON beside observability cache, else repo default."""
+    if observability_cache_path is not None:
+        sibling = observability_cache_path.parent / "lick_twilight_cache.json"
+        if sibling.is_file():
+            return sibling
+    return default_lick_twilight_cache_path()
 
 
 def _altitude_deg_for_airmass(airmass: float) -> float:
@@ -238,24 +257,27 @@ def _run_span(run: List[NightRecord]) -> Tuple[str, str, float, float]:
     )
 
 
-def _find_season_window(
+def _distance_to_run_mjd(today_mjd: float, run: List[NightRecord]) -> float:
+    """Days from today to the nearest point in an observable run (0 if today is inside)."""
+    start_mjd = run[0].evening_twilight_mjd
+    end_mjd = run[-1].morning_twilight_mjd
+    if start_mjd <= today_mjd <= end_mjd + 1.0:
+        return 0.0
+    if today_mjd < start_mjd:
+        return start_mjd - today_mjd
+    return today_mjd - end_mjd
+
+
+def _find_closest_window(
     nights: List[NightRecord],
     today_mjd: float,
 ) -> Optional[Tuple[str, str, float, float]]:
+    """Among merged observable runs, return the one closest to today."""
     runs = _merge_close_runs(_build_season_runs(nights))
     if not runs:
         return None
-
-    for run in runs:
-        start_mjd, end_mjd = run[0].evening_twilight_mjd, run[-1].morning_twilight_mjd
-        if start_mjd <= today_mjd <= end_mjd + 1.0:
-            return _run_span(run)
-
-    for run in runs:
-        if run[0].evening_twilight_mjd >= today_mjd - 1.0:
-            return _run_span(run)
-
-    return _run_span(runs[-1])
+    best = min(runs, key=lambda run: (_distance_to_run_mjd(today_mjd, run), run[0].evening_twilight_mjd))
+    return _run_span(best)
 
 
 @dataclass
@@ -283,12 +305,13 @@ def compute_apf_observability(
     lick_cache_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """
-    APF visibility season at Lick.
+    APF visibility at Lick from reference-now through +scan_horizon_days.
 
-    Nautical (-12°) twilight times and LST come from the UCO/Lick calendar cache
-    (see scripts/build_lick_twilight_cache.py). Target airmass uses HA = LST − RA.
+    Always anchored to Time.now() (Pacific calendar date at Lick) unless start_mjd
+    is passed for tests. Returns the observable run closest to reference-now.
+    Plot shading still caps at plot_horizon_days in rv_keplerian_plots.
     """
-    now_mjd = float(Time.now().mjd) if start_mjd is None else float(start_mjd)
+    now_mjd, today_iso = reference_now(start_mjd)
     plot_end_mjd = now_mjd + float(plot_horizon_days)
     scan_end_mjd = now_mjd + float(scan_horizon_days)
 
@@ -301,8 +324,9 @@ def compute_apf_observability(
             "next_window_end_date": "",
         }
 
-    nights = _sample_nights(coord, now_mjd - 2.0, scan_end_mjd, lick_cache_path=lick_cache_path)
-    season = _find_season_window(nights, now_mjd)
+    nights = _sample_nights(coord, now_mjd, scan_end_mjd, lick_cache_path=lick_cache_path)
+    nights = [n for n in nights if n.calendar_date >= today_iso]
+    season = _find_closest_window(nights, now_mjd)
 
     if season is None:
         return {"circumpolar": False, "windows": []}
@@ -321,13 +345,18 @@ def observability_for_summary(
     summary_path: Path,
     *,
     lick_cache_path: Optional[Path] = None,
+    reference_mjd: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
     sid = parse_object_id_from_summary(summary_path)
     coord = _target_coord_from_summary(summary_path)
     if sid is None or coord is None:
         return None
     try:
-        result = compute_apf_observability(coord, lick_cache_path=lick_cache_path)
+        result = compute_apf_observability(
+            coord,
+            start_mjd=reference_mjd,
+            lick_cache_path=lick_cache_path,
+        )
     except FileNotFoundError:
         return None
     if not result.get("windows") and not result.get("circumpolar"):

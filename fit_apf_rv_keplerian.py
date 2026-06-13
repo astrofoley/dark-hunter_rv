@@ -200,19 +200,20 @@ def resolve_observability_window(
     source_id: Optional[str],
     cache_path: Optional[Path],
 ) -> Optional[Dict[str, Any]]:
-    """APF shading window: cache first, then compute from summary coordinates."""
-    obs = load_observability_window(source_id, cache_path)
-    if obs is not None:
-        return obs
+    """APF shading window: always recomputed from summary coords relative to now."""
     try:
-        from darkhunter_rv.apf_observability import observability_for_summary
+        from darkhunter_rv.apf_observability import (
+            lick_twilight_cache_for_observability,
+            observability_for_summary,
+        )
 
-        row = observability_for_summary(summary_path)
-        if row is None:
-            return None
-        return {k: v for k, v in row.items() if k != "gaia_source_id"}
+        lick_cache = lick_twilight_cache_for_observability(cache_path)
+        row = observability_for_summary(summary_path, lick_cache_path=lick_cache)
+        if row is not None:
+            return {k: v for k, v in row.items() if k != "gaia_source_id"}
     except Exception:
-        return None
+        pass
+    return load_observability_window(source_id, cache_path)
 
 
 def load_observability_window(source_id: Optional[str], cache_path: Optional[Path]) -> Optional[Dict[str, Any]]:
