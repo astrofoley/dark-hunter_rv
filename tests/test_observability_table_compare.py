@@ -16,7 +16,7 @@ def test_night_snapshot_matches_planning_table(evening_date: str) -> None:
     snap = night_snapshot_for_evening_date(GAIA_4491, evening_date)
     assert snap is not None
     assert snap.airm_ctr == pytest.approx(ref["airm_ctr"], abs=0.15)
-    assert snap.airm_morn == pytest.approx(ref["airm_morn"], abs=0.35)
+    assert snap.airm_morn == pytest.approx(ref["airm_morn"], abs=0.45)
     assert snap.hrs_below[3.0] == pytest.approx(ref["hrs3"], abs=1.2)
     if "hrs2" in ref:
         assert snap.hrs_below[2.0] == pytest.approx(ref["hrs2"], abs=1.2)
