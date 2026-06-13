@@ -9,9 +9,26 @@ import json
 import warnings
 from pathlib import Path
 
+from astropy.time import Time
+
 from darkhunter_rv.apf_observability import observability_for_summary
+from darkhunter_rv.lick_twilight_cache import default_cache_path as default_lick_cache_path, load_cache
 from darkhunter_rv.website_table_csv import gaia_id_from_row
 from darkhunter_rv.summary_paths import discover_summary_path
+
+
+def _ensure_lick_cache(cache_path: Path, years: str | None) -> None:
+    if cache_path.is_file() and load_cache(cache_path).get("nights"):
+        return
+    from darkhunter_rv.lick_twilight_cache import build_cache_years
+
+    if years:
+        year_list = [int(y.strip()) for y in years.split(",") if y.strip()]
+    else:
+        y = int(Time.now().datetime.year)
+        year_list = [y - 1, y, y + 1]
+    print(f"Fetching Lick twilight tables for {year_list} …", flush=True)
+    build_cache_years(year_list, cache_path=cache_path)
 
 
 def main() -> int:
@@ -37,13 +54,26 @@ def main() -> int:
         default=None,
         help="Output JSON path (default: REPO/rv_fit_reports/observability_windows_cache.json)",
     )
+    ap.add_argument(
+        "--lick-cache",
+        default=None,
+        help="Lick twilight JSON (default: REPO/rv_fit_reports/lick_twilight_cache.json)",
+    )
+    ap.add_argument(
+        "--lick-years",
+        default=None,
+        help="Years for Lick twilight download if cache missing (default: y-1,y,y+1)",
+    )
     ap.add_argument("--gaia-id", default=None, help="Single Gaia DR3 source id (default: all table rows).")
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parents[1]
     out_dir = Path(args.output_dir) if args.output_dir else repo / "output"
     cache_path = Path(args.cache) if args.cache else repo / "rv_fit_reports" / "observability_windows_cache.json"
+    lick_cache = Path(args.lick_cache) if args.lick_cache else default_lick_cache_path(repo)
     data_csv = Path(args.data_csv)
+
+    _ensure_lick_cache(lick_cache, args.lick_years)
 
     gaia_ids: list[str] = []
     if args.gaia_id:
@@ -71,18 +101,24 @@ def main() -> int:
 
     built = 0
     skipped = 0
-    for sid in gaia_ids:
+    n_ids = len(gaia_ids)
+    for idx, sid in enumerate(gaia_ids, start=1):
         summ = discover_summary_path(out_dir, sid)
         if summ is None:
             skipped += 1
+            print(f"[{idx}/{n_ids}] {sid}: no summary", flush=True)
             continue
-        row = observability_for_summary(summ)
+        row = observability_for_summary(summ, lick_cache_path=lick_cache)
         if row is None:
             skipped += 1
+            print(f"[{idx}/{n_ids}] {sid}: not observable in scan horizon", flush=True)
             continue
         entry = {k: v for k, v in row.items() if k != "gaia_source_id"}
         cache[sid] = entry
         built += 1
+        win = entry.get("next_window_start_date", "")
+        end = entry.get("next_window_end_date", "")
+        print(f"[{idx}/{n_ids}] {sid}: {win} to {end}", flush=True)
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(json.dumps(cache, indent=2, sort_keys=True))
