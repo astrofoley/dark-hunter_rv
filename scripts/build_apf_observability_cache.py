@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Build rv_fit_reports/observability_windows_cache.json for APF visibility shading."""
+"""Build rv_fit_reports/observability_windows_cache.json for APF visibility shading.
+
+Entries are a snapshot at build time (logging / offline review). Plots and fits
+call resolve_observability_window(), which recomputes windows relative to today.
+"""
 
 from __future__ import annotations
 

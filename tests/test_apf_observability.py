@@ -88,3 +88,54 @@ def test_full_year_scan_is_fast(tmp_path: Path) -> None:
         lick_cache_path=lick_cache,
     )
     assert time.perf_counter() - t0 < 2.0
+
+
+def test_forward_scan_does_not_start_before_reference_today(tmp_path: Path) -> None:
+    """Window search is [reference-today, reference-today+1y) in Lick local calendar."""
+    from astropy.time import Time
+
+    from darkhunter_rv.apf_observability import reference_now
+    from darkhunter_rv.lick_twilight_cache import build_cache_years
+
+    lick_cache = tmp_path / "lick_twilight_cache.json"
+    build_cache_years([2026], cache_path=lick_cache)
+    ref_mjd, ref_iso = reference_now(float(Time("2026-06-12").mjd))
+
+    for ra in (55.5, 120.0, 180.0, 270.0):
+        for dec in (-10.0, 20.0, 45.0, 58.0):
+            out = compute_apf_observability(
+                SkyCoord(ra=ra * u.deg, dec=dec * u.deg),
+                start_mjd=ref_mjd,
+                scan_horizon_days=365,
+                lick_cache_path=lick_cache,
+            )
+            start = out.get("next_window_start_date", "")
+            if start:
+                assert start >= ref_iso
+
+
+def test_resolve_observability_prefers_live_over_stale_cache(tmp_path: Path) -> None:
+    from astropy.time import Time
+
+    from darkhunter_rv.apf_observability import reference_now
+    from darkhunter_rv.lick_twilight_cache import build_cache_years
+    from fit_apf_rv_keplerian import resolve_observability_window
+
+    lick_cache = tmp_path / "lick_twilight_cache.json"
+    build_cache_years([2026], cache_path=lick_cache)
+    obs_cache = tmp_path / "observability_windows_cache.json"
+    obs_cache.write_text(
+        '{"999": {"circumpolar": false, "next_window_start_date": "2020-01-01", '
+        '"next_window_end_date": "2020-01-31", "windows": [{"start_date": "2020-01-01", "end_date": "2020-01-31"}]}}'
+    )
+    summ = tmp_path / "Gaia_DR3_999_summary.txt"
+    summ.write_text(
+        "[GAIA METADATA]\nSource_ID: 999\nRA: 120.0\nDec: 20.0\n\n[PIPELINE RESULTS]\n"
+    )
+    ref_mjd, ref_iso = reference_now(float(Time("2026-06-12").mjd))
+    obs = resolve_observability_window(summ, "999", obs_cache)
+    assert obs is not None
+    start = obs.get("next_window_start_date") or obs.get("windows", [{}])[0].get("start_date", "")
+    if start:
+        assert start >= ref_iso
+        assert not start.startswith("2020-")
