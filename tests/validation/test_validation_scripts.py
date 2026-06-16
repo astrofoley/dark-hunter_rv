@@ -21,7 +21,9 @@ def test_build_bias_set(tmp_path):
     out = tmp_path / 'out'
     s = build_bias_set.build_bias(inp, n_boot=20, out_dir=out)
     assert (out / 'bias_by_chunk.csv').exists()
+    assert (out / 'bias_statistics.txt').exists()
     assert s['n_files'] == 2
+    assert s['n_chunk_keys'] >= 1
 
 
 @pytest.mark.validation

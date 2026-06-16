@@ -17,7 +17,7 @@ elif [[ -x /home/marley/anaconda2/envs/gaia-env/bin/python ]]; then
 else
   PY=python3
 fi
-CHUNK_LAYOUT="${CHUNK_LAYOUT:-$REPO/calibration/chunk_layouts/subchunks_4.yaml}"
+CHUNK_LAYOUT="${CHUNK_LAYOUT:-$REPO/calibration/chunk_layouts/subchunks_8.yaml}"
 PIPELINE_FORCE="${PIPELINE_FORCE:-0}"
 MASK_PRIMARY="${MASK_PRIMARY:-1}"
 REPORTS_DIR="${REPORTS_DIR:-$REPO/rv_fit_reports}"

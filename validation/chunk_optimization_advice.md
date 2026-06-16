@@ -110,11 +110,13 @@ Weight model per chunk: `σ = hypot(stat_err, intrinsic)`; `w = 1/σ²`; exposur
 
 ---
 
-## Deploy (#57)
+## Deploy (#57) — mask lane
 
-1. Point production `--chunk-layout` at winner (today: `calibration/chunk_layouts/subchunks_4.yaml`).
-2. Rebuild `bias_statistics.txt` for that layout.
-3. Refit RVs: `scripts/refit_star_rvs.sh` / `scripts/refit_all_per_object_parallel.sh`.
+**Production defaults:** `subchunks_8` (`config.DEFAULT_CHUNK_LAYOUT`, refit scripts).
+
+1. Rebuild debias: `bash scripts/rebuild_mask_bias.sh` (see `calibration/mask_lane_deploy.md`).
+2. Refit RVs: `scripts/refit_star_rvs.sh` / `scripts/refit_all_per_object_parallel.sh`.
+3. Snapshot mask−template overlap before step 10.
 
 ---
 

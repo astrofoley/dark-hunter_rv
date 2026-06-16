@@ -106,6 +106,6 @@ PYTHONPATH=. python -m validation.ccf_estimator_bias \
 
 ## Remaining
 
-- [ ] Mask-only pipeline on `calibration/bias_train.txt` with `gauss_offset` + `subchunks_4`
+- [ ] Mask-only pipeline on `calibration/bias_train.txt` with `gauss_offset` + `subchunks_8`
 - [ ] Replace `bias_statistics.txt` from pipeline orders (not campaign lag-frame regression)
 - [ ] Optional: re-run post-debias on pipeline diagnostics to confirm σ_RV after proper debias

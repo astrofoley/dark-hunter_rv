@@ -2,7 +2,7 @@
 # Re-measure per-epoch mask-CCF RVs (production chunk layout + debias) and Keplerian fit one star.
 #
 # Production defaults:
-#   - chunk layout: calibration/chunk_layouts/subchunks_4.yaml (4 equal pixel splits / order)
+#   - chunk layout: calibration/chunk_layouts/subchunks_8.yaml (8 equal pixel splits / order)
 #   - debias: repo-root bias_statistics.txt (per-order b0/b1/b2)
 #   - summary RV: mask-CCF stack (--no-run-all-methods)
 #   - pipeline: --force (ignore stale diagnostics from older layouts)
@@ -32,7 +32,7 @@ REPO="${REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
 OUT="${OUT:-$REPO/output}"
 SPEC_ROOT="${SPEC_ROOT:-/data2/gaia_stars/apf_reductions}"
 REPORTS_DIR="${REPORTS_DIR:-$REPO/rv_fit_reports}"
-CHUNK_LAYOUT="${CHUNK_LAYOUT:-$REPO/calibration/chunk_layouts/subchunks_4.yaml}"
+CHUNK_LAYOUT="${CHUNK_LAYOUT:-$REPO/calibration/chunk_layouts/subchunks_8.yaml}"
 PIPELINE_FORCE="${PIPELINE_FORCE:-1}"
 MASK_PRIMARY="${MASK_PRIMARY:-1}"
 MIN_POINTS="${MIN_POINTS:-5}"

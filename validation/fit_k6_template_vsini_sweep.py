@@ -82,8 +82,7 @@ def _mask_rv_from_diagnostics(
     if no_bias or not inst.bias_file:
         return rv
     bias = io_utils.read_bias(inst.bias_file)
-    ord_num = int(str(chunk_key).split("_")[0])
-    bvec = bias.get(ord_num, [0.0, 0.0, 0.0])
+    bvec = io_utils.lookup_bias(bias, chunk_key)
     b0 = float(bvec[0]) if isinstance(bvec, (list, tuple)) and len(bvec) >= 1 else 0.0
     return rv + b0
 
