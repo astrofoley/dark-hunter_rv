@@ -65,6 +65,16 @@ PYTHONPATH=. python -m pytest tests/validation/test_literature_rv_master.py -q
 - [x] INDEX.md merge date (2026-06-07)
 - [x] GitHub issue #37 closed (auto via Closes on merge)
 
+## Role in per-method precision program
+
+Step 00 is the **external validation anchor** for all measurement lanes (mask, template, strong-lines), not only the adopted cascade:
+
+- **Phase A absolute gate** (APF ↔ literature, \|ΔRV\| < 1 km/s, `--no-bias`) uses `literature_rv_master.csv` via `validation/rv_phase_a_baseline.py`.
+- **Step 08** will join pipeline summaries to this table for orbit-fit QA and per-reference bias.
+- **Template lane (step 10)** does not replace literature truth; mask−template residuals are internal; literature pairs test zeropoint after each lane is deployed.
+
+Rebuild when arXiv source trees update; row count and `reference_key` disambiguation remain acceptance criteria.
+
 ## Open decisions
 
 None.

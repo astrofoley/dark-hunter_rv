@@ -134,8 +134,7 @@ def main() -> None:
             truth = mask_rv_by_chunk.get(str(chunk_key))
             truth_arg = None
             if truth is not None and np.isfinite(truth):
-                ord_num = int(str(chunk_key).split("_")[0])
-                bvec = bias.get(ord_num, [0.0, 0.0, 0.0])
+                bvec = io_utils.lookup_bias(bias, chunk_key)
                 b0 = float(bvec[0]) if isinstance(bvec, (list, tuple)) and len(bvec) >= 1 else 0.0
                 # Diagnostics mask RV is after -b0; FFT estimator is before pipeline subtracts b0.
                 truth_arg = float(truth) + b0

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Parallel per-object refit: pipeline (subchunks_4 + debias) → Keplerian fit → website per star.
+# Parallel per-object refit: pipeline (subchunks_8 + debias) → Keplerian fit → website per star.
 #
 # Each worker runs scripts/lib/refit_one_object.sh (pipeline, fit, Hβ, stage plots + data.csv row).
 # Uses flock on data.csv updates so parallel workers do not corrupt the website table.

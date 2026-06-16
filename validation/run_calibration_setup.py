@@ -27,13 +27,23 @@ Stages
 This workflow uses :mod:`validation.build_bias_set`, which matches current chunk keys
 (``0_a``, …).
 
-Example::
+Example (full calibration)::
 
   python -m validation.run_calibration_setup \\
     --bias-list calibration/bias_train.txt \\
     --offset-list calibration/offset_train.txt \\
     --instrument APF \\
     --clean-after-bias
+
+Mask debias only (``subchunks_8`` production layout)::
+
+  python -m validation.run_calibration_setup \\
+    --bias-list calibration/bias_train.txt \\
+    --bias-only \\
+    --chunk-layout calibration/chunk_layouts/subchunks_8.yaml \\
+    --clean-after-bias
+
+Or: ``bash scripts/rebuild_mask_bias.sh`` (``SKIP_PIPELINE=1`` to re-aggregate existing ``*_orders.txt``).
 """
 from __future__ import annotations
 
@@ -117,8 +127,24 @@ def _clean_bias_intermediates(
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Full calibration: mask bias + method offsets + manifest")
     ap.add_argument("--bias-list", type=Path, required=True, help="Text file: one spectrum path per line")
-    ap.add_argument("--offset-list", type=Path, required=True, help="Spectra in method-overlap region")
+    ap.add_argument(
+        "--offset-list",
+        type=Path,
+        default=None,
+        help="Spectra in method-overlap region (required unless --bias-only)",
+    )
+    ap.add_argument(
+        "--bias-only",
+        action="store_true",
+        help="Mask bias training + install bias_statistics.txt only (skip method offsets)",
+    )
     ap.add_argument("--instrument", default="APF")
+    ap.add_argument(
+        "--chunk-layout",
+        type=Path,
+        default=None,
+        help="YAML chunk layout for all pipeline batches (default: config.DEFAULT_CHUNK_LAYOUT)",
+    )
     ap.add_argument("--repo-root", type=Path, default=_REPO_ROOT)
     ap.add_argument("--calibration-dir", type=Path, default=_REPO_ROOT / "calibration")
     ap.add_argument("--output-dir", type=Path, default=None, help="Default: config.OUTPUT_DIR")
@@ -144,10 +170,18 @@ def main(argv: list[str] | None = None) -> int:
     plot_dir = Path(args.plot_dir).resolve() if args.plot_dir else Path(dh_config.PLOT_DIR).resolve()
 
     bias_paths = _read_path_list(args.bias_list.resolve())
-    offset_paths = _read_path_list(args.offset_list.resolve())
-    if not offset_paths:
-        logging.error("offset-list is empty (need at least one spectrum for method offsets)")
-        return 2
+    bias_stems = {p.stem for p in bias_paths}
+
+    if args.bias_only:
+        offset_paths: list[Path] = []
+    else:
+        if args.offset_list is None:
+            logging.error("--offset-list is required unless --bias-only")
+            return 2
+        offset_paths = _read_path_list(args.offset_list.resolve())
+        if not offset_paths:
+            logging.error("offset-list is empty (need at least one spectrum for method offsets)")
+            return 2
 
     cal_dir = args.calibration_dir.resolve()
     cal_dir.mkdir(parents=True, exist_ok=True)
@@ -159,6 +193,14 @@ def main(argv: list[str] | None = None) -> int:
 
     bias_flags = ["--mask-only", "--no-bias"]
     full_flags: list[str] = []
+    if args.chunk_layout is not None:
+        layout_flag = ["--chunk-layout", str(args.chunk_layout.resolve())]
+        bias_flags.extend(layout_flag)
+        full_flags.extend(layout_flag)
+    elif dh_config.DEFAULT_CHUNK_LAYOUT is not None:
+        layout_flag = ["--chunk-layout", str(dh_config.DEFAULT_CHUNK_LAYOUT.resolve())]
+        bias_flags.extend(layout_flag)
+        full_flags.extend(layout_flag)
 
     if not bias_paths and not args.skip_bias_pipeline:
         logging.warning("Bias list is empty — bias file may be trivial")
@@ -166,8 +208,16 @@ def main(argv: list[str] | None = None) -> int:
     if not args.skip_bias_pipeline:
         _run_pipeline_batch(bias_paths, repo_root, args.instrument, bias_flags, args.log_level)
 
-    summary = build_bias(output_dir, args.bootstrap, bias_build)
+    summary = build_bias(
+        output_dir,
+        args.bootstrap,
+        bias_build,
+        spectrum_stems=bias_stems,
+    )
     logging.info("bias build summary: %s", summary)
+    if summary.get("n_files", 0) == 0:
+        logging.error("No bias training *_orders.txt found for %d listed spectra", len(bias_paths))
+        return 2
     for name in ("bias_summary.json", "bias_by_chunk.csv"):
         src = bias_build / name
         if src.is_file():
@@ -192,6 +242,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.clean_after_bias:
         _clean_bias_intermediates(bias_paths, output_dir, plot_dir if args.clean_plots else None, args.clean_plots)
         manifest["bias_phase"]["cleaned_intermediates"] = True
+
+    if args.bias_only:
+        save_manifest(manifest_path, manifest)
+        logging.info("Wrote %s (bias-only)", manifest_path)
+        return 0
 
     if not args.skip_offset_pipeline:
         _run_pipeline_batch(offset_paths, repo_root, args.instrument, full_flags, args.log_level)

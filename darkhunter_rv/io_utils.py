@@ -116,6 +116,7 @@ def read_spectrum_maroonx(filename):
     return header_blue, spectrum_data
 
 def read_bias(filename):
+    """Load debias table: keys are chunk_key strings (``10_2``) or legacy echelle order ints."""
     if not filename or not os.path.exists(filename):
         logging.warning(f"Bias file {filename} not found. Assuming zero bias.")
         return {}
@@ -124,13 +125,37 @@ def read_bias(filename):
         df = pd.read_csv(filename, sep='\s+', header=None, comment='#')
         for _, row in df.iterrows():
             try:
-                idx = int(row[0])
-                bias[idx] = [float(row[1]), float(row[2]), float(row[3])]
+                key_raw = str(row[0]).strip()
+                bvec = [float(row[1]), float(row[2]), float(row[3])]
+                if "_" in key_raw:
+                    bias[key_raw] = bvec
+                else:
+                    bias[int(float(key_raw))] = bvec
             except (ValueError, IndexError):
                 continue
     except Exception as e:
         logging.warning(f"Failed to read bias file: {e}. Using zeros.")
     return bias
+
+
+def lookup_bias(bias: dict, chunk_key: str) -> list[float]:
+    """
+    Debias vector [b0, b1, b2] for a pipeline chunk_key.
+
+    Prefer per-chunk_key rows; fall back to legacy per-echelle-order rows.
+    """
+    default = [0.0, 0.0, 0.0]
+    if not bias:
+        return default
+    ck = str(chunk_key)
+    if ck in bias:
+        return list(bias[ck])
+    order = chunking.bias_order_from_chunk_key(chunk_key)
+    if order is not None:
+        for key in (order, str(order)):
+            if key in bias:
+                return list(bias[key])
+    return default
 
 
 def write_method_rv_offsets(

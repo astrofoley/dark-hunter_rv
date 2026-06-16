@@ -667,7 +667,7 @@ def process_spectrum(
         bias = io_utils.read_bias(instrument.bias_file)
         if bias:
             logger.info(
-                "Per-order debias: %d entries from %s (b0 RV shift; b1/b2 err inflation)",
+                "Per-chunk debias: %d entries from %s (b0 RV shift; b1/b2 err inflation)",
                 len(bias),
                 instrument.bias_file,
             )
@@ -772,8 +772,7 @@ def process_spectrum(
         nw, nf, ne = prep["nw"], prep["nf"], prep["ne"]
         line_obs = rv_core.mask_line_flux_in_excluded_wavelengths(nw, 1.0 - nf)
 
-        b_order = chunking.bias_order_from_chunk_key(chunk_key)
-        bvec = bias.get(b_order, [0.0, 0.0, 0.0]) if b_order is not None else [0.0, 0.0, 0.0]
+        bvec = io_utils.lookup_bias(bias, chunk_key)
 
         tell_frac = qc.telluric_fraction(nw)
         mask_line_count = qc.mask_line_count_in_chunk(nw, mw if "mw" in locals() else None)

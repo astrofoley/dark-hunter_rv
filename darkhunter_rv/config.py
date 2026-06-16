@@ -12,16 +12,16 @@ MASK_DIRECTORY = Path(os.environ.get("DARKHUNTER_MASK_DIR", REPO_ROOT / "stellar
 OUTPUT_DIR = Path(os.environ.get("DARKHUNTER_OUTPUT_DIR", REPO_ROOT / "output"))
 PLOT_DIR = Path(os.environ.get("DARKHUNTER_PLOT_DIR", REPO_ROOT / "plots"))
 
-# Production mask-CCF chunk layout (chunk-campaign winner: equal 4-way pixel splits per order).
+# Production mask-CCF chunk layout (chunk-campaign winner: equal 8-way pixel splits per order).
 # Override with DARKHUNTER_CHUNK_LAYOUT; CLI --chunk-layout takes precedence over env/default.
 _chunk_layout_env = os.environ.get("DARKHUNTER_CHUNK_LAYOUT")
 if _chunk_layout_env:
     DEFAULT_CHUNK_LAYOUT: Path | None = Path(_chunk_layout_env)
 else:
-    _prod_layout = REPO_ROOT / "calibration" / "chunk_layouts" / "subchunks_4.yaml"
+    _prod_layout = REPO_ROOT / "calibration" / "chunk_layouts" / "subchunks_8.yaml"
     DEFAULT_CHUNK_LAYOUT = _prod_layout if _prod_layout.is_file() else None
 
-# Per-order debias table for APF (Bias_Mean, Bias_Error, Bias_RMS → b0, b1, b2 in pipeline).
+# Per-chunk debias table for APF (bias_dv, bias_err_stat, bias_rms_stat → b0, b1, b2).
 BIAS_STATISTICS_FILE = Path(
     os.environ.get("DARKHUNTER_BIAS_FILE", REPO_ROOT / "bias_statistics.txt")
 )

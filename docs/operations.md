@@ -18,7 +18,7 @@
 | `DARKHUNTER_PHOENIX_DIR` | PHOENIX HiRes grid root |
 | `DARKHUNTER_METHOD_OFFSETS_FILE` | Path to `method_rv_offsets.txt` (overrides default auto-detect) |
 | `DARKHUNTER_ADOPTED_MAX_SIGMA_KMS` | Max σ (km/s) for “good” tier in cascade (default: same as comparison reports, typically 2.5) |
-| `DARKHUNTER_CHUNK_LAYOUT` | YAML chunk layout (default: `calibration/chunk_layouts/subchunks_4.yaml`) |
+| `DARKHUNTER_CHUNK_LAYOUT` | YAML chunk layout (default: `calibration/chunk_layouts/subchunks_8.yaml`) |
 | `DARKHUNTER_BIAS_FILE` | Per-order debias table (default: repo-root `bias_statistics.txt`) |
 
 ## One-command calibration (recommended)
@@ -42,6 +42,7 @@ This will:
 
 1. Run `python -m darkhunter_rv.pipeline … --mask-only --no-bias` on the bias list (mask CCF chunk RVs only).
 2. Run `validation.build_bias_set` → install `bias_statistics.txt` at the **repo root**.
+   Only `*_orders.txt` stems listed in `--bias-list` are used (stale files in `output/` are ignored).
 3. Optionally **delete** `*_orders.txt` / `*_diagnostics.csv` for those bias spectra (`--clean-after-bias`; add `--clean-plots` to remove PNGs).
 4. Run the **full** default pipeline (multi-method, **with** bias) on the offset list.
 5. Run `validation.compute_method_rv_offsets` → install `method_rv_offsets.txt` at the repo root.
@@ -80,7 +81,7 @@ Use **`--include-offset-calibration`** to force reprocessing of offset-training 
 
 ## Production RV refit (full catalog, parallel)
 
-Re-measure every star with `subchunks_4` + debias, Keplerian fit, and **per-star website update** (plots, summary, `data.csv` row). Low CPU priority; parallel workers use `flock` on `data.csv`.
+Re-measure every star with `subchunks_8` + debias, Keplerian fit, and **per-star website update** (plots, summary, `data.csv` row). Low CPU priority; parallel workers use `flock` on `data.csv`.
 
 ```bash
 cd /data2/darkhunter/dark-hunter_rv
@@ -98,7 +99,7 @@ Attach with `screen -r darkhunter_parallel_refit`. Logs: `logs/refit_all_per_obj
 
 ## Production RV refit (one star: re-measure + Keplerian fit)
 
-Re-run the pipeline with the **production chunk layout** (`subchunks_4`), **committed debias table**, and mask-CCF summary RVs, then fit:
+Re-run the pipeline with the **production chunk layout** (`subchunks_8`), **committed debias table**, and mask-CCF summary RVs, then fit:
 
 ```bash
 cd /Users/rfoley/darkhunter/rvs/dark-hunter_rv
@@ -117,7 +118,13 @@ STAR_ID=1702370142434513152 bash scripts/refit_star_rvs.sh
 
 Use `python3` (or set `PY=...`) on the server — bare `python` may be Python 2.7. Set `DARKHUNTER_PHOENIX_DIR` if HiRes PHOENIX is not under `~/phoenix/HiResFITS` or `phoenix_models/`.
 
-**Debias:** `bias_statistics.txt` at repo root (56 APF orders). Per sub-chunk, debias uses the parent echelle order (`9_2` → order 9). Rebuild after layout changes via `validation.run_calibration_setup` (issue #57).
+**Debias:** `bias_statistics.txt` at repo root (one row per **chunk_key**, e.g. `9_2` for subchunks_8). Rebuild after layout changes:
+
+```bash
+bash scripts/rebuild_mask_bias.sh
+```
+
+See `calibration/mask_lane_deploy.md`. Legacy per-echelle-order rows (integer key `9`) still work as a fallback when a chunk_key is missing.
 
 ## Daily / cron processing
 
