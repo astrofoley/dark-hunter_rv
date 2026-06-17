@@ -133,7 +133,7 @@ def main() -> int:
             if args.star_id and sid != str(args.star_id):
                 continue
             out_png = out_dir / f"Gaia_DR3_{sid}" / f"Gaia_DR3_{sid}_rv_plot.png"
-            if build_plot(summ, out_png, obs_cache=obs_cache):
+            if build_plot(summ, out_png, obs_cache=obs_cache, reports_dir=reports_dir):
                 extra += 1
         print(f"RV data plots for summaries without fits: {extra}")
 

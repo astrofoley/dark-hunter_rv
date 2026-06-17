@@ -33,7 +33,10 @@ NIGHT_SAMPLE_MINUTES = 30
 SCAN_HORIZON_DAYS = 365
 PLOT_HORIZON_DAYS = 90
 HORIZON_DAYS = SCAN_HORIZON_DAYS
-MERGE_RUN_GAP_DAYS = 45
+# Merge only brief intra-season gaps (weather); inter-season gaps are much longer.
+MERGE_RUN_GAP_DAYS = 12
+# After merge, split if consecutive observable nights are separated by >N days.
+MAX_RUN_NIGHT_GAP_DAYS = 14
 
 
 def reference_now(reference_mjd: Optional[float] = None) -> Tuple[float, str, float]:
@@ -275,19 +278,44 @@ def _distance_to_run_mjd(today_mjd: float, run: List[NightRecord]) -> float:
     return today_mjd - end_mjd
 
 
+def _split_run_at_night_gaps(
+    run: List[NightRecord],
+    *,
+    max_gap_days: float = MAX_RUN_NIGHT_GAP_DAYS,
+) -> List[List[NightRecord]]:
+    """Split a run where merged seasons left a multi-week hole between nights."""
+    if not run:
+        return []
+    pieces: List[List[NightRecord]] = [[run[0]]]
+    for night in run[1:]:
+        gap = night.evening_twilight_mjd - pieces[-1][-1].morning_twilight_mjd
+        if gap > max_gap_days:
+            pieces.append([night])
+        else:
+            pieces[-1].append(night)
+    return pieces
+
+
+def _all_season_runs(nights: List[NightRecord]) -> List[List[NightRecord]]:
+    runs = _merge_close_runs(_build_season_runs(nights))
+    out: List[List[NightRecord]] = []
+    for run in runs:
+        out.extend(_split_run_at_night_gaps(run))
+    return out
+
+
 def _find_best_window(
     nights: List[NightRecord],
     today_mjd: float,
 ) -> Optional[Tuple[str, str, float, float]]:
-    """Merged observable season closest to today; prefer the longest run on ties."""
-    runs = _merge_close_runs(_build_season_runs(nights))
+    """Observable season closest to today (not a scan-horizon-spanning merge)."""
+    runs = _all_season_runs(nights)
     if not runs:
         return None
     best = min(
         runs,
         key=lambda run: (
             _distance_to_run_mjd(today_mjd, run),
-            -len(run),
             run[0].evening_twilight_mjd,
         ),
     )
