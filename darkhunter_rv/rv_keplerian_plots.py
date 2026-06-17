@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from fit_apf_rv_keplerian import RVPoint
 
-from darkhunter_rv.apf_observability import PLOT_HORIZON_DAYS
+from darkhunter_rv.apf_observability import PLOT_HORIZON_DAYS, window_mjd_bounds
 from darkhunter_rv.rv_point_filters import rv_value_is_valid
 
 
@@ -86,19 +86,25 @@ def _time_window(
 def _xlim_from_data(t: np.ndarray, report: dict) -> Tuple[float, float]:
     """X limits spanning all RV epochs (small padding; include Today/APF markers if just outside)."""
     now_mjd = float(report.get("now_mjd", Time.now().mjd))
-    if t.size == 0:
-        return now_mjd - 30.0, now_mjd + 30.0
-    t_span = float(np.ptp(t) + 1.0)
-    pad = 0.03 * t_span
-    t_lo = float(np.min(t) - pad)
-    t_hi = float(np.max(t) + pad)
-    t_lo = min(t_lo, now_mjd - 0.01 * t_span)
-    t_hi = max(t_hi, now_mjd + 0.01 * t_span)
     plot_cap_mjd = now_mjd + float(PLOT_HORIZON_DAYS)
+    if t.size == 0:
+        return now_mjd - 30.0, min(now_mjd + 30.0, plot_cap_mjd)
+    if t.size == 1:
+        t_mid = float(t[0])
+        t_lo = t_mid - 15.0
+        t_hi = t_mid + 15.0
+    else:
+        t_span = float(np.ptp(t) + 1.0)
+        pad = 0.03 * t_span
+        t_lo = float(np.min(t) - pad)
+        t_hi = float(np.max(t) + pad)
+    t_lo = min(t_lo, now_mjd - 1.0)
+    t_hi = max(t_hi, now_mjd + 1.0)
     obs_start, obs_end, _ = _observability_span(report)
     if obs_start is not None and obs_end is not None:
-        t_lo = min(t_lo, obs_start - 0.01 * t_span)
-        t_hi = max(t_hi, min(obs_end + 0.01 * t_span, plot_cap_mjd))
+        pad = max(1.0, 0.02 * (t_hi - t_lo))
+        t_lo = min(t_lo, obs_start - pad)
+        t_hi = max(t_hi, min(obs_end + pad, plot_cap_mjd))
     t_hi = min(t_hi, plot_cap_mjd)
     return t_lo, t_hi
 
@@ -139,12 +145,8 @@ def _observability_span(report: dict) -> Tuple[Optional[float], Optional[float],
     ends: List[float] = []
     for w in windows:
         try:
-            if w.get("start_mjd") is not None and w.get("end_mjd") is not None:
-                starts.append(float(w["start_mjd"]))
-                ends.append(float(w["end_mjd"]) + 1.0)
-            elif w.get("start_date") and w.get("end_date"):
-                starts.append(float(Time(w["start_date"], format="iso", scale="utc").mjd))
-                ends.append(float(Time(w["end_date"], format="iso", scale="utc").mjd) + 1.0)
+            starts.append(window_mjd_bounds(w)[0])
+            ends.append(window_mjd_bounds(w)[1])
         except Exception:
             continue
     if not starts or not ends:
@@ -171,12 +173,7 @@ def _shade_apf_window(
     label_parts: List[str] = []
     for w in windows:
         try:
-            if w.get("start_mjd") is not None and w.get("end_mjd") is not None:
-                obs_start = float(w["start_mjd"])
-                obs_end = float(w["end_mjd"]) + 1.0
-            else:
-                obs_start = float(Time(w["start_date"], format="iso", scale="utc").mjd)
-                obs_end = float(Time(w["end_date"], format="iso", scale="utc").mjd) + 1.0
+            obs_start, obs_end = window_mjd_bounds(w)
         except Exception:
             continue
         left = max(t_start, obs_start)
@@ -395,28 +392,28 @@ def plot_rv_data_only(
 ) -> None:
     """Our telescope epochs only; Today + APF window markers."""
     pts = our_telescope_points(points)
-    if len(pts) < 2:
-        raise ValueError("need at least 2 our-telescope points for data plot")
+    if len(pts) < 1:
+        raise ValueError("need at least 1 our-telescope point for data plot")
 
     t = np.array([p.mjd for p in pts], dtype=float)
     y = np.array([p.rv for p in pts], dtype=float)
-    t_start, t_end, now_mjd = _time_window(t, report, include_future=True)
+    t_lo, t_hi = _xlim_from_data(t, report)
+    now_mjd = float(report.get("now_mjd", Time.now().mjd))
 
     fig, ax = plt.subplots(figsize=(10.5, 4.9))
-    _shade_apf_window(ax, t_start, t_end, report)
     yerr = _fitmod().effective_yerr_for_points(pts, report)
     _plot_points(ax, pts, include_literature=False, yerr=yerr)
 
     y_lim = _y_limits_data_and_models(t, y, [])
     ax.set_ylim(*y_lim)
     y_top_in = y_lim[1] - 0.02 * (y_lim[1] - y_lim[0])
-    _mark_today(ax, now_mjd, y_top_in)
+    _mark_time_reference(ax, report, t_lo, t_hi, y_top_in, annotate=True)
 
     sid = _fitmod().parse_object_id_from_summary(summary_path) or summary_path.stem.replace("_summary", "")
     ax.set_xlabel("MJD")
     ax.set_ylabel("RV (km/s)")
     ax.set_title(f"{title_prefix}: Gaia DR3 {sid}")
-    ax.set_xlim(t_start, t_end)
+    ax.set_xlim(t_lo, t_hi)
     _style_rv_axes(ax)
     ax.legend(loc="best", fontsize=8.5)
 

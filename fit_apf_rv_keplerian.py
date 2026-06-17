@@ -34,7 +34,12 @@ import numpy as np
 from astropy.timeseries import LombScargle
 from astropy.time import Time
 
-from darkhunter_rv.apf_observability import PLOT_HORIZON_DAYS
+from darkhunter_rv.apf_observability import (
+    PLOT_HORIZON_DAYS,
+    lick_twilight_cache_for_observability,
+    normalize_observability_window,
+    observability_for_summary,
+)
 from darkhunter_rv.summary_paths import (
     count_pipeline_rows,
     discover_summary_files,
@@ -202,18 +207,16 @@ def resolve_observability_window(
 ) -> Optional[Dict[str, Any]]:
     """APF shading window: always recomputed from summary coords relative to now."""
     try:
-        from darkhunter_rv.apf_observability import (
-            lick_twilight_cache_for_observability,
-            observability_for_summary,
-        )
-
         lick_cache = lick_twilight_cache_for_observability(cache_path)
         row = observability_for_summary(summary_path, lick_cache_path=lick_cache)
         if row is not None:
-            return {k: v for k, v in row.items() if k != "gaia_source_id"}
+            return normalize_observability_window(
+                {k: v for k, v in row.items() if k != "gaia_source_id"}
+            )
     except Exception:
         pass
-    return load_observability_window(source_id, cache_path)
+    cached = load_observability_window(source_id, cache_path)
+    return normalize_observability_window(cached)
 
 
 def load_observability_window(source_id: Optional[str], cache_path: Optional[Path]) -> Optional[Dict[str, Any]]:
@@ -245,15 +248,17 @@ def load_observability_window(source_id: Optional[str], cache_path: Optional[Pat
             if isinstance(w0, dict):
                 out["start_date"] = w0.get("start_date", "")
                 out["end_date"] = windows[-1].get("end_date", "") if isinstance(windows[-1], dict) else ""
-        return out if out.get("start_date") and out.get("end_date") else None
+        return normalize_observability_window(out) if out.get("start_date") and out.get("end_date") else None
     if not isinstance(s, str) or not isinstance(e, str) or (not s) or (not e):
         return None
-    return {
-        "start_date": s,
-        "end_date": e,
-        "circumpolar": circumpolar,
-        "windows": [{"start_date": s, "end_date": e}],
-    }
+    return normalize_observability_window(
+        {
+            "start_date": s,
+            "end_date": e,
+            "circumpolar": circumpolar,
+            "windows": [{"start_date": s, "end_date": e}],
+        }
+    )
 
 
 def _save_json_cache(path: Path, data: Dict[str, Any]) -> None:
@@ -1993,7 +1998,7 @@ def run_one(
         summary_path, points_fit, fit_variants, report, resid_png, m1_msun=m1_for_masses
     )
     ours = our_telescope_points(points_fit)
-    if len(ours) >= 2:
+    if len(ours) >= 1:
         plot_rv_data_only(summary_path, ours, report, data_png)
 
     if plots_root is not None and gaia_source_id:

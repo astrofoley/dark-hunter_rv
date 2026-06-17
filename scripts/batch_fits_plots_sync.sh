@@ -157,6 +157,7 @@ if [[ "$RUN_RV_PLOTS" == "1" ]]; then
     scripts/plot_rv_from_summaries.py
     --summary-dir "$OUT"
     --plots-root "$OUT"
+    --observability-cache "$REPORTS_DIR/observability_windows_cache.json"
   )
   if [[ -n "$STAR_ID" ]]; then
     plot_args+=(--star-id "$STAR_ID")
