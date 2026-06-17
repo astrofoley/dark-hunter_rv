@@ -26,9 +26,9 @@ def test_build_plot_nested_summary(tmp_path: Path) -> None:
     assert out_png.stat().st_size > 1000
 
 
-def test_build_plot_skips_single_epoch(tmp_path: Path) -> None:
+def test_build_plot_single_epoch(tmp_path: Path) -> None:
     summ = tmp_path / "Gaia_DR3_111_summary.txt"
     _write_summary(summ, n_epochs=1)
     out_png = tmp_path / "Gaia_DR3_111_rv_plot.png"
-    assert rvplot.build_plot(summ, out_png) is False
-    assert not out_png.is_file()
+    assert rvplot.build_plot(summ, out_png) is True
+    assert out_png.is_file()

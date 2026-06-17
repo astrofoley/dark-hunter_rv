@@ -1993,7 +1993,7 @@ def run_one(
         summary_path, points_fit, fit_variants, report, resid_png, m1_msun=m1_for_masses
     )
     ours = our_telescope_points(points_fit)
-    if len(ours) >= 2:
+    if len(ours) >= 1:
         plot_rv_data_only(summary_path, ours, report, data_png)
 
     if plots_root is not None and gaia_source_id:
