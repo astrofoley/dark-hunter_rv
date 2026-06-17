@@ -68,7 +68,43 @@ def test_airmass_limit_is_17() -> None:
     assert ALTITUDE_MIN_DEG == pytest.approx(36.3, abs=0.5)
 
 
-def test_plot_horizon_is_three_months() -> None:
+def test_window_mjd_bounds_prefers_dates_when_mjds_are_stale() -> None:
+    from astropy.time import Time
+
+    from darkhunter_rv.apf_observability import window_mjd_bounds
+
+    w = {
+        "start_date": "2026-06-17",
+        "end_date": "2027-06-17",
+        "start_mjd": float(Time("2026-06-17T20:00:00", scale="utc").mjd),
+        "end_mjd": float(Time("2026-06-18T06:00:00", scale="utc").mjd),
+    }
+    start, end = window_mjd_bounds(w)
+    assert end - start > 30.0
+
+
+def test_normalize_observability_window_repairs_stale_mjds() -> None:
+    from astropy.time import Time
+
+    from darkhunter_rv.apf_observability import normalize_observability_window
+
+    obs = normalize_observability_window(
+        {
+            "windows": [
+                {
+                    "start_date": "2026-06-17",
+                    "end_date": "2026-07-31",
+                    "start_mjd": float(Time("2026-06-17T20:00:00", scale="utc").mjd),
+                    "end_mjd": float(Time("2026-06-18T06:00:00", scale="utc").mjd),
+                }
+            ]
+        }
+    )
+    assert obs is not None
+    w = obs["windows"][0]
+    assert w["end_mjd"] - w["start_mjd"] > 20.0
+    assert obs["start_date"] == "2026-06-17"
+    assert obs["end_date"] == "2026-07-31"
     assert PLOT_HORIZON_DAYS == 90
     assert SCAN_HORIZON_DAYS >= 180
 
@@ -99,7 +135,7 @@ def test_forward_scan_does_not_start_before_reference_today(tmp_path: Path) -> N
 
     lick_cache = tmp_path / "lick_twilight_cache.json"
     build_cache_years([2026], cache_path=lick_cache)
-    ref_mjd, ref_iso = reference_now(float(Time("2026-06-12").mjd))
+    ref_mjd, ref_iso, _ref_start = reference_now(float(Time("2026-06-12").mjd))
 
     for ra in (55.5, 120.0, 180.0, 270.0):
         for dec in (-10.0, 20.0, 45.0, 58.0):
@@ -132,7 +168,7 @@ def test_resolve_observability_prefers_live_over_stale_cache(tmp_path: Path) -> 
     summ.write_text(
         "[GAIA METADATA]\nSource_ID: 999\nRA: 120.0\nDec: 20.0\n\n[PIPELINE RESULTS]\n"
     )
-    ref_mjd, ref_iso = reference_now(float(Time("2026-06-12").mjd))
+    ref_mjd, ref_iso, _ref_start = reference_now(float(Time("2026-06-12").mjd))
     obs = resolve_observability_window(summ, "999", obs_cache)
     assert obs is not None
     start = obs.get("next_window_start_date") or obs.get("windows", [{}])[0].get("start_date", "")

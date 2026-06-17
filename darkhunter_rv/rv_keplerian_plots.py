@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from fit_apf_rv_keplerian import RVPoint
 
-from darkhunter_rv.apf_observability import PLOT_HORIZON_DAYS
+from darkhunter_rv.apf_observability import PLOT_HORIZON_DAYS, window_mjd_bounds
 from darkhunter_rv.rv_point_filters import rv_value_is_valid
 
 
@@ -145,12 +145,8 @@ def _observability_span(report: dict) -> Tuple[Optional[float], Optional[float],
     ends: List[float] = []
     for w in windows:
         try:
-            if w.get("start_mjd") is not None and w.get("end_mjd") is not None:
-                starts.append(float(w["start_mjd"]))
-                ends.append(float(w["end_mjd"]) + 1.0)
-            elif w.get("start_date") and w.get("end_date"):
-                starts.append(float(Time(w["start_date"], format="iso", scale="utc").mjd))
-                ends.append(float(Time(w["end_date"], format="iso", scale="utc").mjd) + 1.0)
+            starts.append(window_mjd_bounds(w)[0])
+            ends.append(window_mjd_bounds(w)[1])
         except Exception:
             continue
     if not starts or not ends:
@@ -177,12 +173,7 @@ def _shade_apf_window(
     label_parts: List[str] = []
     for w in windows:
         try:
-            if w.get("start_mjd") is not None and w.get("end_mjd") is not None:
-                obs_start = float(w["start_mjd"])
-                obs_end = float(w["end_mjd"]) + 1.0
-            else:
-                obs_start = float(Time(w["start_date"], format="iso", scale="utc").mjd)
-                obs_end = float(Time(w["end_date"], format="iso", scale="utc").mjd) + 1.0
+            obs_start, obs_end = window_mjd_bounds(w)
         except Exception:
             continue
         left = max(t_start, obs_start)
