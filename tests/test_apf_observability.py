@@ -105,8 +105,33 @@ def test_normalize_observability_window_repairs_stale_mjds() -> None:
     assert w["end_mjd"] - w["start_mjd"] > 20.0
     assert obs["start_date"] == "2026-06-17"
     assert obs["end_date"] == "2026-07-31"
+
+
+def test_plot_horizon_is_three_months() -> None:
     assert PLOT_HORIZON_DAYS == 90
     assert SCAN_HORIZON_DAYS >= 180
+
+
+def test_season_window_not_full_scan_year() -> None:
+    """Merged runs must not bridge separate seasons into a ~365d window."""
+    from astropy.time import Time
+
+    ref = float(Time("2026-06-17T14:00:00", scale="utc").mjd)
+    lick = default_lick_twilight_cache_path()
+    for ra, dec in ((55.52045, 57.90254), (120.0, 20.0), (180.0, 45.0)):
+        out = compute_apf_observability(
+            SkyCoord(ra=ra * u.deg, dec=dec * u.deg),
+            start_mjd=ref,
+            scan_horizon_days=365,
+            lick_cache_path=lick,
+        )
+        if not out.get("windows"):
+            continue
+        w = out["windows"][0]
+        date_span = float(Time(w["end_date"], format="iso", scale="utc").mjd) - float(
+            Time(w["start_date"], format="iso", scale="utc").mjd
+        )
+        assert date_span < 250.0, (ra, dec, w["start_date"], w["end_date"])
 
 
 def test_full_year_scan_is_fast(tmp_path: Path) -> None:

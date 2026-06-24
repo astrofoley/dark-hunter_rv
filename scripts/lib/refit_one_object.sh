@@ -129,6 +129,8 @@ if [[ "$RUN_RV_PLOTS" == "1" ]]; then
   "$PY" scripts/plot_rv_from_summaries.py \
     --summary-dir "$OUT" \
     --plots-root "$OUT" \
+    --reports-dir "$REPORTS_DIR" \
+    --observability-cache "$REPORTS_DIR/observability_windows_cache.json" \
     --star-id "$gid" \
     || echo "[WARN] RV data plot failed for Gaia_DR3_${gid} (continuing)"
 fi

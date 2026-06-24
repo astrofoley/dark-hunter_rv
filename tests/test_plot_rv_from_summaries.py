@@ -1,5 +1,6 @@
 """Tests for summary-only RV data plots (no network)."""
 
+import json
 from pathlib import Path
 
 from scripts import plot_rv_from_summaries as rvplot
@@ -24,6 +25,36 @@ def test_build_plot_nested_summary(tmp_path: Path) -> None:
     assert rvplot.build_plot(summ, out_png) is True
     assert out_png.is_file()
     assert out_png.stat().st_size > 1000
+
+
+def test_build_plot_uses_fit_json_observability_fallback(tmp_path: Path) -> None:
+    summ = tmp_path / "Gaia_DR3_111_summary.txt"
+    summ.write_text(
+        "[PIPELINE RESULTS]\n# hdr\n"
+        "Gaia_DR3_111_epoch_1.txt 60001 -10.0 0.02 0.4 False\n"
+    )
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    (reports / "111_keplerian_fit.json").write_text(
+        json.dumps(
+            {
+                "observability_window": {
+                    "circumpolar": False,
+                    "windows": [
+                        {
+                            "start_date": "2026-08-14",
+                            "end_date": "2027-05-24",
+                            "start_mjd": 61200.0,
+                            "end_mjd": 61400.0,
+                        }
+                    ],
+                }
+            }
+        )
+    )
+    obs = rvplot.observability_for_plot("111", summ, None, reports)
+    assert obs is not None
+    assert obs["windows"][0]["start_date"] == "2026-08-14"
 
 
 def test_build_plot_single_epoch(tmp_path: Path) -> None:
