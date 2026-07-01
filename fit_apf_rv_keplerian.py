@@ -215,8 +215,11 @@ def resolve_observability_window(
             return normalize_observability_window(
                 {k: v for k, v in row.items() if k != "gaia_source_id"}
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        print(
+            f"[WARN] live APF observability failed for {source_id or summary_path.name}: {exc}",
+            flush=True,
+        )
     cached = load_observability_window(source_id, cache_path)
     return normalize_observability_window(cached)
 
@@ -1958,6 +1961,48 @@ def load_table_m1_map_from_csv(data_csv: Path) -> Dict[str, float]:
     return out
 
 
+def write_rv_data_plot_for_summary(
+    summary_path: Path,
+    points: Sequence[RVPoint],
+    *,
+    gaia_source_id: Optional[str],
+    plots_root: Optional[Path],
+    observability_cache_path: Optional[Path],
+    lick_cache_path: Optional[Path] = None,
+) -> None:
+    """RV data plot + APF window shading; does not depend on min_points or fit success."""
+    from darkhunter_rv.rv_keplerian_plots import our_telescope_points, plot_rv_data_only
+
+    if plots_root is None or not gaia_source_id:
+        return
+    ours = our_telescope_points(points)
+    if ours:
+        t_ref = float(np.median([p.mjd for p in ours]))
+    else:
+        t_ref = float(Time.now().mjd)
+    lick_cache = lick_cache_path or lick_twilight_cache_for_observability(observability_cache_path)
+    obs = resolve_observability_window(
+        summary_path,
+        gaia_source_id,
+        observability_cache_path,
+        lick_cache_path=lick_cache,
+    )
+    if obs is None:
+        print(
+            f"[WARN] {gaia_source_id}: no APF observability window on RV data plot (check Lick twilight cache)",
+            flush=True,
+        )
+    report = {
+        "t_ref_mjd": t_ref,
+        "now_mjd": float(Time.now().mjd),
+        "next_rv_max_mjd": t_ref,
+        "next_rv_min_mjd": t_ref,
+        "observability_window": obs,
+    }
+    out_png = plots_root / f"Gaia_DR3_{gaia_source_id}" / f"Gaia_DR3_{gaia_source_id}_rv_plot.png"
+    plot_rv_data_only(summary_path, ours, report, out_png)
+
+
 def run_one(
     summary_path: Path,
     out_dir: Path,
@@ -1987,12 +2032,24 @@ def run_one(
     )
 
     points = parse_summary(summary_path)
+    gaia_source_id = parse_object_id_from_summary(summary_path)
     n_epochs = len(points)
+
+    def _write_rv_plot_if_requested(pts: Sequence[RVPoint]) -> None:
+        write_rv_data_plot_for_summary(
+            summary_path,
+            pts,
+            gaia_source_id=gaia_source_id,
+            plots_root=plots_root,
+            observability_cache_path=observability_cache_path,
+        )
+
     if n_epochs < min_points:
         print(
             f"[SKIP] {summary_path}: n_epochs={n_epochs} < min_points={min_points} "
             f"(file rows in [PIPELINE RESULTS]={count_pipeline_rows(summary_path)})"
         )
+        _write_rv_plot_if_requested(points)
         return None
     if max_points is not None and n_epochs > max_points:
         print(f"[SKIP] {summary_path}: n_epochs={n_epochs} > max_points={max_points}")
@@ -2012,12 +2069,12 @@ def run_one(
             f"[SKIP] {summary_path.name}: n_finite_rv={len(t)} < min_points={min_points} "
             f"(parsed {n_before} rows)"
         )
+        _write_rv_plot_if_requested(points_fit)
         return None
     if max_points is not None and len(t) > max_points:
         print(f"[SKIP] {summary_path.name}: n_finite_rv={len(t)} > max_points={max_points}")
         return None
 
-    gaia_source_id = parse_object_id_from_summary(summary_path)
     gaia_nss = None
     nss_source: Optional[str] = None
     if use_gaia_nss:
@@ -2083,7 +2140,10 @@ def run_one(
     report["gaia_nss"] = gaia_nss
     report["nss_priors_source"] = nss_source
     report["observability_window"] = resolve_observability_window(
-        summary_path, gaia_source_id, observability_cache_path
+        summary_path,
+        gaia_source_id,
+        observability_cache_path,
+        lick_cache_path=lick_twilight_cache_for_observability(observability_cache_path),
     )
     report["fit_variants"] = {k: copy.deepcopy(v[1]) for k, v in fit_variants.items()}
     report["params_by_variant"] = {k: np.asarray(v[0], dtype=float).tolist() for k, v in fit_variants.items()}

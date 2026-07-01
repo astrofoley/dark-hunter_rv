@@ -80,10 +80,13 @@ def build_plot(
     reports_dir: Optional[Path] = None,
     lick_cache: Optional[Path] = None,
 ) -> bool:
-    if _target_coord_from_summary(summary_path) is None:
-        return False
-    points = our_telescope_points(parse_summary(summary_path))
     sid = parse_object_id_from_summary(summary_path)
+    if _target_coord_from_summary(summary_path) is None:
+        print(
+            f"[WARN] {sid or summary_path.name}: no [GAIA METADATA] RA/Dec; APF window may be missing",
+            flush=True,
+        )
+    points = our_telescope_points(parse_summary(summary_path))
     report = minimal_report(
         points,
         summary_path=summary_path,

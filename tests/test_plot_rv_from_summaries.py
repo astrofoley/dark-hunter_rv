@@ -71,6 +71,36 @@ def test_build_plot_zero_epochs_with_coords(tmp_path: Path) -> None:
     assert report.get("observability_window") is not None
 
 
+def test_build_plot_three_epochs_includes_observability_window(tmp_path: Path) -> None:
+    from darkhunter_rv.lick_twilight_cache import build_cache_years
+    from darkhunter_rv.rv_keplerian_plots import our_telescope_points
+    from fit_apf_rv_keplerian import parse_summary
+
+    lick = tmp_path / "lick_twilight_cache.json"
+    build_cache_years([2026], cache_path=lick)
+    summ = tmp_path / "Gaia_DR3_111_summary.txt"
+    rows = "\n".join(
+        f"Gaia_DR3_111_epoch_{i}.txt {60000 + i * 30} {-10.0 + i * 0.1} 0.02 0.4 False"
+        for i in range(1, 4)
+    )
+    summ.write_text(
+        "[GAIA METADATA]\nSource_ID: 111\nRA: 120.0\nDec: 20.0\n"
+        f"\n[PIPELINE RESULTS]\n# hdr\n{rows}\n"
+    )
+    out_png = tmp_path / "Gaia_DR3_111" / "Gaia_DR3_111_rv_plot.png"
+    points = our_telescope_points(parse_summary(summ))
+    report = rvplot.minimal_report(
+        points,
+        summary_path=summ,
+        obs_cache=None,
+        reports_dir=None,
+        lick_cache=lick,
+    )
+    assert report.get("observability_window") is not None
+    assert rvplot.build_plot(summ, out_png, lick_cache=lick) is True
+    assert out_png.is_file()
+
+
 def test_build_plot_single_epoch(tmp_path: Path) -> None:
     summ = tmp_path / "Gaia_DR3_111_summary.txt"
     _write_summary(summ, n_epochs=1)

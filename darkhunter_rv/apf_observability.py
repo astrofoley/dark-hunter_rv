@@ -353,6 +353,7 @@ def _find_best_window(
 ) -> Optional[Tuple[str, str, float, float]]:
     """Observable season closest to today (not a scan-horizon-spanning merge)."""
     runs = _all_season_runs(nights)
+    runs = [run for run in runs if run[-1].morning_twilight_mjd >= today_mjd - 0.5]
     if not runs:
         return None
     best = min(
@@ -490,9 +491,9 @@ def compute_apf_observability(
     scan_end_mjd = now_mjd + float(scan_horizon_days)
 
     nights = _sample_nights(coord, today_start_mjd, scan_end_mjd, lick_cache_path=lick_cache_path)
-    nights_future = [n for n in nights if n.calendar_date >= today_iso]
+    nights_forward = [n for n in nights if n.evening_twilight_mjd >= today_start_mjd - 0.5]
 
-    if _is_circumpolar_for_apf(coord, nights_future):
+    if _is_circumpolar_for_apf(coord, nights_forward):
         win = ObsWindow(now_mjd, plot_end_mjd, "", "")
         return {
             "circumpolar": True,
@@ -501,12 +502,15 @@ def compute_apf_observability(
             "next_window_end_date": "",
         }
 
-    season = _find_best_window(nights_future, now_mjd)
+    season = _find_best_window(nights_forward, now_mjd)
 
     if season is None:
         return {"circumpolar": False, "windows": []}
 
     start_date, end_date, start_mjd_win, end_mjd_win = season
+    if start_mjd_win < today_start_mjd - 0.01 and end_mjd_win >= now_mjd:
+        start_mjd_win = today_start_mjd
+        start_date = today_iso
     if _season_calendar_span_days(start_date, end_date) > MAX_SEASON_CALENDAR_DAYS:
         end_date = _lick_date_from_mjd(end_mjd_win)
         start_date = _lick_date_from_mjd(start_mjd_win)

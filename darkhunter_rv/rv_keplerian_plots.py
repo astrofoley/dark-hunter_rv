@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from fit_apf_rv_keplerian import RVPoint
 
-from darkhunter_rv.apf_observability import PLOT_HORIZON_DAYS, window_mjd_bounds
+from darkhunter_rv.apf_observability import PLOT_HORIZON_DAYS, SCAN_HORIZON_DAYS, window_mjd_bounds
 from darkhunter_rv.rv_point_filters import rv_value_is_valid
 
 
@@ -87,6 +87,7 @@ def _xlim_from_data(t: np.ndarray, report: dict) -> Tuple[float, float]:
     """X limits spanning all RV epochs (small padding; include Today/APF markers if just outside)."""
     now_mjd = float(report.get("now_mjd", Time.now().mjd))
     plot_cap_mjd = now_mjd + float(PLOT_HORIZON_DAYS)
+    obs_cap_mjd = now_mjd + float(SCAN_HORIZON_DAYS)
     if t.size == 0:
         return now_mjd - 30.0, min(now_mjd + 30.0, plot_cap_mjd)
     if t.size == 1:
@@ -101,11 +102,13 @@ def _xlim_from_data(t: np.ndarray, report: dict) -> Tuple[float, float]:
     t_lo = min(t_lo, now_mjd - 1.0)
     t_hi = max(t_hi, now_mjd + 1.0)
     obs_start, obs_end, _ = _observability_span(report)
+    future_cap = plot_cap_mjd
     if obs_start is not None and obs_end is not None:
         pad = max(1.0, 0.02 * (t_hi - t_lo))
         t_lo = min(t_lo, obs_start - pad)
-        t_hi = max(t_hi, min(obs_end + pad, plot_cap_mjd))
-    t_hi = min(t_hi, plot_cap_mjd)
+        t_hi = max(t_hi, min(obs_end + pad, obs_cap_mjd))
+        future_cap = obs_cap_mjd
+    t_hi = min(t_hi, future_cap)
     return t_lo, t_hi
 
 
@@ -170,23 +173,26 @@ def _shade_apf_window(
         return
     now_mjd = float(report.get("now_mjd", Time.now().mjd))
     plot_cap_mjd = now_mjd + float(PLOT_HORIZON_DAYS)
+    obs_cap_mjd = now_mjd + float(SCAN_HORIZON_DAYS)
     label_parts: List[str] = []
     for w in windows:
         try:
             obs_start, obs_end = window_mjd_bounds(w)
         except Exception:
             continue
-        left = max(t_start, obs_start)
-        right = min(t_end, obs_end, plot_cap_mjd)
-        if right <= left:
-            continue
-        ax.axvspan(left, right, color="tab:blue", alpha=0.12, zorder=0)
+        date_label = None
         if w.get("start_date") and w.get("end_date"):
-            label_parts.append(f"{w['start_date']} to {w['end_date']}")
+            date_label = f"{w['start_date']} to {w['end_date']}"
+        left = max(t_start, obs_start)
+        right = min(t_end, obs_end, obs_cap_mjd)
+        if right > left:
+            ax.axvspan(left, right, color="tab:blue", alpha=0.12, zorder=0)
+        if date_label:
+            label_parts.append(date_label)
     msg = ""
     if annotate:
         if obs_win.get("circumpolar"):
-            msg = f"Circumpolar (airmass ≤ 1.7, next {int(plot_cap_mjd - now_mjd)} d)"
+            msg = f"Circumpolar (airmass ≤ 1.7, next {int(min(plot_cap_mjd, obs_cap_mjd) - now_mjd)} d)"
         elif label_parts:
             msg = "APF window " + label_parts[0]
     if annotate and msg:

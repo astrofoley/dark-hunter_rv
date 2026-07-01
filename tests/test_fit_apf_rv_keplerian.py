@@ -153,6 +153,45 @@ def test_run_one_skips_all_nan_rv(tmp_path: Path) -> None:
                           observability_cache_path=None, query_gaia_online=False) is None
 
 
+def test_run_one_below_min_points_still_writes_rv_plot(tmp_path: Path) -> None:
+    from darkhunter_rv.lick_twilight_cache import build_cache_years
+
+    lick = tmp_path / "lick_twilight_cache.json"
+    build_cache_years([2026], cache_path=lick)
+    summ = tmp_path / "Gaia_DR3_111_summary.txt"
+    summ.write_text(
+        "[GAIA METADATA]\nSource_ID: 111\nRA: 120.0\nDec: 20.0\n"
+        "\n[PIPELINE RESULTS]\n# hdr\n"
+        "Gaia_DR3_111_epoch_1.txt 60001 -10.0 0.02 0.4 False\n"
+        "Gaia_DR3_111_epoch_2.txt 60031 -9.9 0.02 0.4 False\n"
+        "Gaia_DR3_111_epoch_3.txt 60061 -9.8 0.02 0.4 False\n"
+    )
+    plots_root = tmp_path / "output"
+    obs_cache = tmp_path / "observability_windows_cache.json"
+    obs_cache.write_text("{}")
+    assert fitmod.run_one(
+        summ,
+        tmp_path / "reports",
+        min_points=5,
+        max_points=None,
+        m1_msun=None,
+        period_min=None,
+        period_max=None,
+        period_prior=None,
+        period_prior_sigma=0.15,
+        fix_period=None,
+        fix_e=None,
+        use_gaia_nss=False,
+        gaia_cache_path=None,
+        observability_cache_path=obs_cache,
+        query_gaia_online=False,
+        plots_root=plots_root,
+    ) is None
+    out_png = plots_root / "Gaia_DR3_111" / "Gaia_DR3_111_rv_plot.png"
+    assert out_png.is_file()
+    assert out_png.stat().st_size > 1000
+
+
 def test_fit_keplerian_clips_initial_guess() -> None:
     t = np.linspace(60000.0, 60070.0, 8)
     y = np.sin(2 * np.pi * t / 12.0) * 5.0

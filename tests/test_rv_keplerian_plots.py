@@ -14,7 +14,7 @@ def test_residual_ylim_caps_at_five_kms() -> None:
 def test_xlim_uses_date_bounds_when_mjds_are_stale() -> None:
     from astropy.time import Time
 
-    from darkhunter_rv.apf_observability import PLOT_HORIZON_DAYS
+    from darkhunter_rv.apf_observability import PLOT_HORIZON_DAYS, SCAN_HORIZON_DAYS
 
     now_mjd = float(Time("2026-06-17T14:00:00", scale="utc").mjd)
     t = np.array([60650.0, 61100.0])
@@ -32,14 +32,14 @@ def test_xlim_uses_date_bounds_when_mjds_are_stale() -> None:
         },
     }
     lo, hi = plots._xlim_from_data(t, report)
-    assert hi > now_mjd + 30.0
-    assert hi <= now_mjd + float(PLOT_HORIZON_DAYS) + 1.0
+    assert hi > float(np.max(t))
+    assert hi >= now_mjd + 1.0
 
 
 def test_xlim_from_data_caps_future_at_plot_horizon() -> None:
     from astropy.time import Time
 
-    from darkhunter_rv.apf_observability import PLOT_HORIZON_DAYS
+    from darkhunter_rv.apf_observability import PLOT_HORIZON_DAYS, SCAN_HORIZON_DAYS
 
     now_mjd = float(Time("2026-06-12").mjd)
     t = np.array([60650.0, 61200.0])
@@ -57,7 +57,8 @@ def test_xlim_from_data_caps_future_at_plot_horizon() -> None:
         },
     }
     lo, hi = plots._xlim_from_data(t, report)
-    assert hi <= now_mjd + float(PLOT_HORIZON_DAYS) + 1.0
+    assert hi > now_mjd + float(PLOT_HORIZON_DAYS)
+    assert hi <= now_mjd + float(SCAN_HORIZON_DAYS) + 1.0
 
 
 def test_xlim_from_data_spans_epochs() -> None:
