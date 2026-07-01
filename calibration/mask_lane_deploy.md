@@ -8,6 +8,9 @@
 |------|--------|
 | Chunk layout | `calibration/chunk_layouts/subchunks_8.yaml` |
 | Default | `darkhunter_rv.config.DEFAULT_CHUNK_LAYOUT` |
+| Continuum (mask CCF) | `sinc_blaze_only` via `--continuum-mode split` + `calibration/blaze_orders_apf.json` |
+| Continuum (template / strong lines) | `sinc_blaze` (blaze then spline) on same split mode |
+| Legacy spline-only | `--no-blaze-continuum` or `--continuum-mode spline` |
 | CCF estimator | `gauss_offset` (`config.MASK_CCF_ESTIMATOR`) |
 | Debias table | `bias_statistics.txt` (per **chunk_key**, e.g. `10_2`; rebuild after layout change) |
 | Bias training set | `calibration/bias_train.txt` (114 campaign spectra) |
@@ -20,7 +23,7 @@
 
 ## Mask debias rebuild (`subchunks_8`)
 
-Rebuild per-order `bias_statistics.txt` from the committed bias training set (mask-only, no debias applied during training):
+Rebuild per-chunk `bias_statistics.txt` from the committed bias training set (mask-only, no debias applied during training):
 
 ```bash
 cd /Users/rfoley/darkhunter/rvs/dark-hunter_rv

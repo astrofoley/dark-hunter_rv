@@ -44,7 +44,8 @@ Useful flags:
 
 - `--log-level DEBUG|INFO|WARNING|ERROR`
 - `--plots` and `--plot-dir <dir>`
-- `--continuum-mode spline|blaze`
+- `--continuum-mode split|spline|blaze|sinc_blaze|sinc_blaze_only` — default **`split`**: mask CCF uses per-order sinc² blaze only (`sinc_blaze_only`); template / strong-lines use blaze then spline (`sinc_blaze`). Requires `calibration/blaze_orders_apf.json` (build below). Escape hatches: `--no-blaze-continuum` or `--continuum-mode spline`.
+- `--blaze-calibration <path>` — override blaze JSON (default: `calibration/blaze_orders_apf.json`)
 - `--subchunks N` (split each order into N pixel chunks)
 - **Default:** multi-method diagnostics (mask + template + strong lines) and **cascade** adopted RV (mask → template → strong; see `docs/rv_methods_evaluation.md`); `--no-run-all-methods` for legacy behavior
 - `--mask-only` — stellar mask chunk RVs only (bias training; use with `--no-bias`); see `docs/operations.md`
@@ -92,6 +93,19 @@ This writes `<prefix>.sb1.txt` and `<prefix>.sb1.png`.
 ```bash
 PYTHONPATH=. python3 -m pytest -q
 ```
+
+### Per-order blaze calibration (APF)
+
+Build or refresh `calibration/blaze_orders_apf.json` from high-S/N campaign spectra:
+
+```bash
+cd /Users/rfoley/darkhunter/rvs/dark-hunter_rv
+PYTHONPATH=. python3 -m validation.build_blaze_calibration \
+  --spectrum-list validation_output/chunk_campaign/spectrum_list.txt \
+  --overlap-csv validation_output/template_fft_baseline/overlap/overlap_enriched_per_exposure.csv
+```
+
+Hβ / clean-order diagnostic fits: `python -m validation.fit_hbeta_order_blaze --help`.
 
 ### Notes on execution environment
 
