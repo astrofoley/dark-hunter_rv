@@ -1850,6 +1850,9 @@ function writeInputs() {
     const toggleRecentKeck = document.getElementById("toggle-recent-keck");
     const toggleRecentApfWeek = document.getElementById("toggle-recent-apf-week");
     const toggleRecentKeckWeek = document.getElementById("toggle-recent-keck-week");
+    const toggleSampleAtf22 = document.getElementById("toggle-sample-atf22");
+    const toggleSampleE24Ns = document.getElementById("toggle-sample-e24ns");
+    const toggleSampleE24Full = document.getElementById("toggle-sample-e24full");
     const yesNoToggleControls = YES_NO_PARAMS.map(param => document.getElementById(param.toggleId));
     const pageSizeSelect = document.getElementById("page-size");
     const firstBtn = document.getElementById("page-first");
@@ -1876,9 +1879,6 @@ function writeInputs() {
     if (toggleRecentKeck) toggleRecentKeck.checked = initialState.rkeck;
     if (toggleRecentApfWeek) toggleRecentApfWeek.checked = initialState.w7apf;
     if (toggleRecentKeckWeek) toggleRecentKeckWeek.checked = initialState.w7keck;
-    const toggleSampleAtf22 = document.getElementById("toggle-sample-atf22");
-    const toggleSampleE24Ns = document.getElementById("toggle-sample-e24ns");
-    const toggleSampleE24Full = document.getElementById("toggle-sample-e24full");
     if (toggleSampleAtf22) toggleSampleAtf22.checked = initialState.sampleAtf22;
     if (toggleSampleE24Ns) toggleSampleE24Ns.checked = initialState.sampleE24Ns;
     if (toggleSampleE24Full) toggleSampleE24Full.checked = initialState.sampleE24Full;
@@ -1928,9 +1928,6 @@ function writeInputs() {
     if (toggleRecentKeck) toggleRecentKeck.addEventListener("change", () => { currentPage = 1; applyFiltersAndPagination(); });
     if (toggleRecentApfWeek) toggleRecentApfWeek.addEventListener("change", () => { currentPage = 1; applyFiltersAndPagination(); });
     if (toggleRecentKeckWeek) toggleRecentKeckWeek.addEventListener("change", () => { currentPage = 1; applyFiltersAndPagination(); });
-    const toggleSampleAtf22 = document.getElementById("toggle-sample-atf22");
-    const toggleSampleE24Ns = document.getElementById("toggle-sample-e24ns");
-    const toggleSampleE24Full = document.getElementById("toggle-sample-e24full");
     if (toggleSampleAtf22) toggleSampleAtf22.addEventListener("change", () => { currentPage = 1; applyFiltersAndPagination(); });
     if (toggleSampleE24Ns) toggleSampleE24Ns.addEventListener("change", () => { currentPage = 1; applyFiltersAndPagination(); });
     if (toggleSampleE24Full) toggleSampleE24Full.addEventListener("change", () => { currentPage = 1; applyFiltersAndPagination(); });
