@@ -8,6 +8,7 @@ import json
 import shutil
 import warnings
 from pathlib import Path
+from typing import Optional
 
 import matplotlib
 
@@ -35,8 +36,8 @@ def replot_from_fit_json(
     *,
     out_dir: Path,
     reports_dir: Path,
-    obs_cache: Path | None,
-    lick_cache: Path | None = None,
+    obs_cache: Optional[Path],
+    lick_cache: Optional[Path] = None,
 ) -> bool:
     gid = fit_json.stem.replace("_keplerian_fit", "")
     summ = out_dir / f"Gaia_DR3_{gid}_summary.txt"

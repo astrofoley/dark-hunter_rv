@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Dict, Optional
 
 import matplotlib
 
@@ -20,13 +21,13 @@ from fit_apf_rv_keplerian import parse_summary, resolve_observability_window
 
 
 def observability_for_plot(
-    sid: str | None,
+    sid: Optional[str],
     summary_path: Path,
-    obs_cache: Path | None,
-    reports_dir: Path | None,
+    obs_cache: Optional[Path],
+    reports_dir: Optional[Path],
     *,
-    lick_cache: Path | None = None,
-) -> dict | None:
+    lick_cache: Optional[Path] = None,
+) -> Optional[Dict]:
     """Live window from summary coords; fit JSON fallback only if Lick cache unavailable."""
     obs = resolve_observability_window(
         summary_path, sid, obs_cache, lick_cache_path=lick_cache
@@ -51,9 +52,9 @@ def minimal_report(
     points,
     *,
     summary_path: Path,
-    obs_cache: Path | None,
-    reports_dir: Path | None,
-    lick_cache: Path | None = None,
+    obs_cache: Optional[Path],
+    reports_dir: Optional[Path],
+    lick_cache: Optional[Path] = None,
 ) -> dict:
     t = np.array([p.mjd for p in points], dtype=float)
     t_ref = float(np.median(t)) if t.size else float(Time.now().mjd)
@@ -74,9 +75,9 @@ def build_plot(
     summary_path: Path,
     out_png: Path,
     *,
-    obs_cache: Path | None = None,
-    reports_dir: Path | None = None,
-    lick_cache: Path | None = None,
+    obs_cache: Optional[Path] = None,
+    reports_dir: Optional[Path] = None,
+    lick_cache: Optional[Path] = None,
 ) -> bool:
     if _target_coord_from_summary(summary_path) is None:
         return False

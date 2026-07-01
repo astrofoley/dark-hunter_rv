@@ -8,6 +8,7 @@ import csv
 import json
 import warnings
 from pathlib import Path
+from typing import Dict, List, Optional
 
 from fit_apf_rv_keplerian import (
     _load_json_cache,
@@ -54,10 +55,10 @@ def update_table_columns(
     *,
     out_dir: Path,
     reports_dir: Path,
-    gaia_id: str | None = None,
-    gaia_cache: dict | None = None,
-) -> dict[str, int]:
-    rows: list[list[str]] = []
+    gaia_id: Optional[str] = None,
+    gaia_cache: Optional[dict] = None,
+) -> Dict[str, int]:
+    rows: List[List[str]] = []
     with data_csv.open(newline="", encoding="utf-8") as fh:
         rows = list(csv.reader(fh))
     if not rows:
@@ -89,7 +90,7 @@ def update_table_columns(
     gaia_ids = [g for g in gaia_ids if g]
     n_cache_summ = enrich_gaia_cache_from_summaries(gaia_cache, out_dir, gaia_ids=gaia_ids)
 
-    reports: dict[str, dict] = {}
+    reports: Dict[str, dict] = {}
     if reports_dir.is_dir():
         for p in sorted(reports_dir.glob("*_keplerian_fit.json")):
             sid = p.stem.replace("_keplerian_fit", "")

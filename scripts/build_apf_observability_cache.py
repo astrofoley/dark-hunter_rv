@@ -12,6 +12,7 @@ import csv
 import json
 import warnings
 from pathlib import Path
+from typing import List, Optional
 
 from astropy.time import Time
 
@@ -21,7 +22,7 @@ from darkhunter_rv.website_table_csv import gaia_id_from_row
 from darkhunter_rv.summary_paths import discover_summary_path
 
 
-def _ensure_lick_cache(cache_path: Path, years: str | None) -> None:
+def _ensure_lick_cache(cache_path: Path, years: Optional[str]) -> None:
     if cache_path.is_file() and load_cache(cache_path).get("nights"):
         return
     from darkhunter_rv.lick_twilight_cache import build_cache_years
@@ -79,7 +80,7 @@ def main() -> int:
 
     _ensure_lick_cache(lick_cache, args.lick_years)
 
-    gaia_ids: list[str] = []
+    gaia_ids: List[str] = []
     if args.gaia_id:
         gaia_ids = [str(args.gaia_id).strip()]
     elif data_csv.is_file():
