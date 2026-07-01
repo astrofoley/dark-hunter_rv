@@ -21,12 +21,19 @@ else:
     _prod_layout = REPO_ROOT / "calibration" / "chunk_layouts" / "subchunks_8.yaml"
     DEFAULT_CHUNK_LAYOUT = _prod_layout if _prod_layout.is_file() else None
 
+BLAZE_CALIBRATION_FILE = Path(
+    os.environ.get(
+        "DARKHUNTER_BLAZE_CALIBRATION",
+        REPO_ROOT / "calibration" / "blaze_orders_apf.json",
+    )
+)
+
 # Per-chunk debias table for APF (bias_dv, bias_err_stat, bias_rms_stat → b0, b1, b2).
 BIAS_STATISTICS_FILE = Path(
     os.environ.get("DARKHUNTER_BIAS_FILE", REPO_ROOT / "bias_statistics.txt")
 )
 
-# HiRes grids: directory containing WAVE_PHOENIX-ACES-AGSS-COND-2011.fits (or WAVE_PHOENIX*.fits) and
+# HiRes grids:
 # PHOENIX-ACES-AGSS-COND-2011/ (metallicity subfolders with lte*.fits flux files).
 # Override with DARKHUNTER_PHOENIX_DIR. If unset, use ~/phoenix/HiResFITS when that tree exists
 # (e.g. /Users/rfoley/phoenix/HiResFITS), else REPO_ROOT / "phoenix_models".
@@ -74,6 +81,11 @@ VSINI_WIDE_GRID_CAP_KMS = 160.0
 # moderate width so line cores/wings do not pull the continuum; hot stars use a wider exclusion.
 COOL_SPLINE_EXCLUDE_NEAR_LINES_WIDTH = 55.0
 HOT_SPLINE_EXCLUDE_NEAR_LINES_WIDTH = 78.0
+
+# Shared per-order sinc² blaze (``calibration/blaze_orders_apf.json``): mask CCF uses blaze-only;
+# template FFT and strong-line paths use blaze then spline. See ``pipeline._resolve_continuum_mode``.
+MASK_CONTINUUM_MODE = "sinc_blaze_only"
+TEMPLATE_CONTINUUM_MODE = "sinc_blaze"
 
 # Spline continuum: rolling upper-envelope estimate (percentile_filter) so noisy orders track the
 # continuum **top** instead of a mix of lines+noise. Second pass smooths the envelope slightly.

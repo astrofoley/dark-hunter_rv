@@ -219,6 +219,46 @@ def _fit_continuum_blaze(wavelength, flux, eflux, poly_order=4):
     return wavelength[final_mask], norm_flux[final_mask], norm_eflux[final_mask]
 
 
+def _fit_continuum_sinc_blaze(
+    wavelength,
+    flux,
+    eflux,
+    blaze_model,
+    *,
+    continuum_mode: str,
+    num_knots=5,
+    order=3,
+    exclude_near_lines_width: float | None = None,
+):
+    """Divide by calibrated sinc² blaze; optionally spline on blaze-corrected flux."""
+    from darkhunter_rv.blaze import OrderBlazeModel
+
+    if not isinstance(blaze_model, OrderBlazeModel):
+        raise TypeError("blaze_model must be OrderBlazeModel")
+    wavelength = np.array(wavelength, float)
+    flux = np.array(flux, float)
+    eflux = np.array(eflux, float)
+    fc = blaze_model.correct_flux(wavelength, flux)
+    ec = blaze_model.correct_flux(wavelength, eflux)
+    good = np.isfinite(fc) & (fc > 0)
+    level = float(np.nanmedian(fc[good])) if np.any(good) else float(np.nanmedian(fc))
+    if not np.isfinite(level) or level <= 0:
+        level = 1.0
+    if continuum_mode == "sinc_blaze_only":
+        norm_flux = fc / level
+        norm_eflux = ec / level
+        final_mask = np.isfinite(norm_flux) & (norm_flux > 0)
+        return wavelength[final_mask], norm_flux[final_mask], norm_eflux[final_mask]
+    return _fit_continuum_spline(
+        wavelength,
+        fc,
+        ec,
+        num_knots=num_knots,
+        order=order,
+        exclude_near_lines_width=exclude_near_lines_width,
+    )
+
+
 def fit_continuum(
     wavelength,
     flux,
@@ -227,14 +267,33 @@ def fit_continuum(
     order=3,
     continuum_mode="spline",
     exclude_near_lines_width: float | None = None,
+    blaze_model=None,
+    echelle_order: int | None = None,
 ):
     """
-    Normalize for line work: continuum_mode is 'spline' or 'blaze'.
+    Normalize for line work.
 
-    ``exclude_near_lines_width`` (Å): when set (e.g. 78 for very hot stars), pixels within this
-    distance of strong Balmer/He lines are dropped from spline anchor points so broad wings do not
-    pull the continuum; default None uses all inter-line pixels (subject to CR/ISM masks).
+    continuum_mode:
+      - ``spline`` / ``blaze``: legacy per-spectrum continuum (no shared calibration).
+      - ``sinc_blaze``: shared per-order sinc² blaze, then spline on blaze-corrected flux.
+      - ``sinc_blaze_only``: shared blaze + median normalization only.
     """
+    if continuum_mode in ("sinc_blaze", "sinc_blaze_only"):
+        if blaze_model is None:
+            raise ValueError(
+                f"continuum_mode={continuum_mode!r} requires blaze_model "
+                f"(order={echelle_order}); build calibration with validation.build_blaze_calibration"
+            )
+        return _fit_continuum_sinc_blaze(
+            wavelength,
+            flux,
+            eflux,
+            blaze_model,
+            continuum_mode=continuum_mode,
+            num_knots=num_knots,
+            order=order,
+            exclude_near_lines_width=exclude_near_lines_width,
+        )
     if continuum_mode == "blaze":
         return _fit_continuum_blaze(wavelength, flux, eflux, poly_order=min(6, order + 2))
     return _fit_continuum_spline(

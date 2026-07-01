@@ -30,6 +30,18 @@ EXTERNAL_CATALOG_PREFIXES: tuple[str, ...] = (
     GES_TELESCOPE_PREFIX,
 )
 
+# DR3 source_id is up to 19 digits; some APF targets use 16–17 digit ids.
+GAIA_DR3_ID_RE = re.compile(r"Gaia_DR3_(\d{16,19})")
+
+
+def parse_gaia_id_from_path(path: str | Path) -> int | None:
+    """Extract Gaia DR3 source_id from a path or filename (16–19 digit ids)."""
+    m = GAIA_DR3_ID_RE.search(str(path))
+    if m:
+        return int(m.group(1))
+    return None
+
+
 def _gaia_class():
     """Lazy import: avoids astroquery's noisy archive banner when only reading summaries from disk."""
     try:
@@ -45,10 +57,7 @@ def parse_gaia_id(filename):
     Extracts the Gaia DR3 Source ID from a filename.
     Matches patterns like 'Gaia_DR3_1702370142434513152_epoch_1.txt'.
     """
-    match = re.search(r"Gaia_DR3_(\d{18,19})", str(filename))
-    if match:
-        return int(match.group(1))
-    return None
+    return parse_gaia_id_from_path(filename)
 
 
 def execute_gaia_adql(query: str, name: str) -> list:

@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from . import config, instruments, io_utils, continuum, rv_core, templates, chunking, plotting, qc
+from .gaia_utils import parse_gaia_id_from_path
 from darkhunter_rv.summary_paths import is_primary_epoch_spectrum_name
 
 logger = logging.getLogger(__name__)
@@ -277,15 +278,64 @@ def _bank_entry_for_template_key_str(bank: dict, tpl_key_str: str) -> tuple[np.n
     return next(iter(bank.values())) if bank else None
 
 
-def _continuum_fit_kw(args: argparse.Namespace, hot_continuum: bool) -> dict:
-    """Exclude pixels near strong lines from spline continuum anchors (see continuum.fit_continuum)."""
-    kw: dict = {"continuum_mode": args.continuum_mode}
-    kw["exclude_near_lines_width"] = float(
-        config.HOT_SPLINE_EXCLUDE_NEAR_LINES_WIDTH
-        if hot_continuum
-        else config.COOL_SPLINE_EXCLUDE_NEAR_LINES_WIDTH
-    )
+def _resolve_continuum_mode(args: argparse.Namespace, lane: str) -> str:
+    """
+    ``lane`` is ``mask`` (mask CCF), ``template`` (template FFT / vote), or ``strong`` (Hβ / strong lines).
+
+    Default ``continuum_mode=split``: mask → ``MASK_CONTINUUM_MODE``, template/strong → ``TEMPLATE_CONTINUUM_MODE``
+    when blaze calibration is loaded; otherwise spline everywhere.
+    """
+    if bool(getattr(args, "no_blaze_continuum", False)):
+        return "spline"
+    mode = str(getattr(args, "continuum_mode", "split"))
+    if mode == "split":
+        if getattr(args, "blaze_calibration", None) is None:
+            return "spline"
+        if lane == "mask":
+            return str(config.MASK_CONTINUUM_MODE)
+        return str(config.TEMPLATE_CONTINUUM_MODE)
+    return mode
+
+
+def _continuum_fit_kw(
+    args: argparse.Namespace,
+    hot_continuum: bool,
+    *,
+    echelle_order: int | None = None,
+    lane: str = "mask",
+) -> dict:
+    """Continuum kwargs for fit_continuum (blaze model resolved per echelle order when set)."""
+    mode = _resolve_continuum_mode(args, lane)
+    kw: dict = {"continuum_mode": mode}
+    if echelle_order is not None:
+        kw["echelle_order"] = int(echelle_order)
+    blaze_cal = getattr(args, "blaze_calibration", None)
+    if mode in ("sinc_blaze", "sinc_blaze_only"):
+        if blaze_cal is not None and echelle_order is not None:
+            model = blaze_cal.model_for_order(int(echelle_order))
+            if model is not None:
+                kw["blaze_model"] = model
+            else:
+                kw["continuum_mode"] = "spline"
+                mode = "spline"
+                logger.debug("No blaze model for order %s; spline fallback", echelle_order)
+        else:
+            kw["continuum_mode"] = "spline"
+            mode = "spline"
+    if mode in ("spline", "sinc_blaze"):
+        kw["exclude_near_lines_width"] = float(
+            config.HOT_SPLINE_EXCLUDE_NEAR_LINES_WIDTH
+            if hot_continuum
+            else config.COOL_SPLINE_EXCLUDE_NEAR_LINES_WIDTH
+        )
     return kw
+
+
+def _prep_template_norm(prep: dict) -> tuple[np.ndarray, np.ndarray]:
+    """Template / strong-line normalization (blaze+spline when split mode is active)."""
+    nw = np.asarray(prep.get("nw_tpl", prep["nw"]), float)
+    nf = np.asarray(prep.get("nf_tpl", prep["nf"]), float)
+    return nw, nf
 
 
 def _vote_exposure_fft_template_key(
@@ -319,7 +369,7 @@ def _vote_exposure_fft_template_key(
     sum_rms_st: dict = defaultdict(float)
     cnt_st: dict = defaultdict(int)
     for prep in chunk_preps:
-        nw, nf = prep["nw"], prep["nf"]
+        nw, nf = _prep_template_norm(prep)
         nw = np.asarray(nw, float)
         line = rv_core.mask_line_flux_in_excluded_wavelengths(nw, 1.0 - nf)
         obs_resamp, window, fft_obs, _va, mask_vel, vel_win, tpl_grid_wave = rv_core._fft_velocity_window(
@@ -367,7 +417,7 @@ def _vote_exposure_fft_template_key(
     sum_rms_k: dict = defaultdict(float)
     cnt_k: dict = defaultdict(int)
     for prep in chunk_preps:
-        nw, nf = prep["nw"], prep["nf"]
+        nw, nf = _prep_template_norm(prep)
         nw = np.asarray(nw, float)
         line = rv_core.mask_line_flux_in_excluded_wavelengths(nw, 1.0 - nf)
         obs_resamp, window, fft_obs, _va, mask_vel, vel_win, tpl_grid_wave = rv_core._fft_velocity_window(
@@ -463,7 +513,8 @@ def _mask_tournament(
     instrument,
     test_orders: list,
     mask_glob_dir: Path,
-    continuum_mode: str,
+    args: argparse.Namespace,
+    hot_continuum: bool,
 ) -> tuple[dict | None, str, list[tuple[str, float]]]:
     """Return ({w,s}, best_name, [(stem, peak_sum), ...])."""
     inst_lower = instrument.name.lower()
@@ -495,7 +546,12 @@ def _mask_tournament(
             if len(w) < 10:
                 continue
             try:
-                nw, nf, _ = continuum.fit_continuum(w, f, e, continuum_mode=continuum_mode)
+                nw, nf, _ = continuum.fit_continuum(
+                    w,
+                    f,
+                    e,
+                    **_continuum_fit_kw(args, hot_continuum, echelle_order=int(o), lane="mask"),
+                )
             except Exception:
                 continue
             if nw[-1] < mw[0] or nw[0] > mw[-1]:
@@ -560,7 +616,7 @@ def process_spectrum(
     run_mask_paths = (not use_fft_primary) or run_multi
     if run_mask_paths:
         mask_pack, best_mask_name, tournament_scores = _mask_tournament(
-            spec_data, instrument, test_orders, mask_dir, args.continuum_mode
+            spec_data, instrument, test_orders, mask_dir, args, use_fft_primary
         )
         if mask_pack is not None:
             mw, ms = mask_pack["w"], mask_pack["s"]
@@ -740,18 +796,40 @@ def process_spectrum(
         chunk_iter = iter_order_chunks_from_layout(spec_data, instrument.bad_orders, layout)
     else:
         chunk_iter = chunking.iter_order_chunks(spec_data, instrument.bad_orders, args.subchunks)
+    need_template_norm = bool(run_multi or use_fft_primary)
     for chunk_key, w, f, e in chunk_iter:
         if len(w) < 10:
             continue
+        ord_num, _, _ = chunking.parse_chunk_key(chunk_key)
         try:
-            nw, nf, ne = continuum.fit_continuum(w, f, e, **_continuum_fit_kw(args, use_fft_primary))
+            nw, nf, ne = continuum.fit_continuum(
+                w,
+                f,
+                e,
+                **_continuum_fit_kw(args, use_fft_primary, echelle_order=ord_num, lane="mask"),
+            )
             nw, nf, ne = continuum.despike_normalized_pre_ccf(nw, nf, ne)
         except Exception as ex:
             logger.debug("continuum fail chunk=%s: %s", chunk_key, ex)
             continue
-        chunk_preps.append(
-            {"chunk_key": chunk_key, "w": w, "f": f, "e": e, "nw": nw, "nf": nf, "ne": ne}
-        )
+        prep: dict = {"chunk_key": chunk_key, "w": w, "f": f, "e": e, "nw": nw, "nf": nf, "ne": ne}
+        if need_template_norm:
+            try:
+                nw_tpl, nf_tpl, ne_tpl = continuum.fit_continuum(
+                    w,
+                    f,
+                    e,
+                    **_continuum_fit_kw(args, use_fft_primary, echelle_order=ord_num, lane="template"),
+                )
+                nw_tpl, nf_tpl, ne_tpl = continuum.despike_normalized_pre_ccf(nw_tpl, nf_tpl, ne_tpl)
+                prep["nw_tpl"] = nw_tpl
+                prep["nf_tpl"] = nf_tpl
+                prep["ne_tpl"] = ne_tpl
+            except Exception as ex:
+                logger.debug("template continuum fail chunk=%s: %s", chunk_key, ex)
+                prep["nw_tpl"] = nw
+                prep["nf_tpl"] = nf
+        chunk_preps.append(prep)
 
     bank_fft = bank
     if (
@@ -770,7 +848,9 @@ def process_spectrum(
         chunk_key = prep["chunk_key"]
         w, f, e = prep["w"], prep["f"], prep["e"]
         nw, nf, ne = prep["nw"], prep["nf"], prep["ne"]
+        nw_tpl, nf_tpl = _prep_template_norm(prep)
         line_obs = rv_core.mask_line_flux_in_excluded_wavelengths(nw, 1.0 - nf)
+        line_obs_tpl = rv_core.mask_line_flux_in_excluded_wavelengths(nw_tpl, 1.0 - nf_tpl)
 
         bvec = io_utils.lookup_bias(bias, chunk_key)
 
@@ -839,7 +919,7 @@ def process_spectrum(
                     "chunk_key": chunk_key,
                     "mjd": mjd,
                     "teff": teff_diag,
-                    "continuum_mode": args.continuum_mode,
+                    "continuum_mode": _resolve_continuum_mode(args, "mask"),
                     "method": "mask_ccf",
                     "mask_name": best_mask_name,
                     "rv_kms": rv_m,
@@ -914,8 +994,8 @@ def process_spectrum(
                     else config.FFT_TEMPLATE_PEAK_PICK_COOL
                 )
                 rv_t_fft_raw, tpl_key_plot, vel_ccf, ccf_arr = rv_core.estimate_rv_fft_with_ccf(
-                    nw,
-                    line_obs,
+                    nw_tpl,
+                    line_obs_tpl,
                     bank_fft,
                     vsini,
                     fft_two_phase=not bool(getattr(args, "no_fft_two_phase", False)),
@@ -990,7 +1070,7 @@ def process_spectrum(
                     "chunk_key": chunk_key,
                     "mjd": mjd,
                     "teff": teff_diag,
-                    "continuum_mode": args.continuum_mode,
+                    "continuum_mode": _resolve_continuum_mode(args, "template"),
                     "method": "template_fft",
                     "mask_name": "",
                     "rv_kms": rv_t,
@@ -1051,7 +1131,7 @@ def process_spectrum(
             tw, tf = bank_fft[tpl_key_plot]
             R = float(getattr(instrument, "resolving_power", 60_000.0))
             ser = rv_core.build_fft_match_plot_series(
-                nw, line_obs, tw, tf, float(rv_t_fft_raw), R
+                nw_tpl, line_obs_tpl, tw, tf, float(rv_t_fft_raw), R
             )
             rv_ord_plot = float(rv_p) if np.isfinite(rv_p) else None
             ccf_bundle = None
@@ -1074,7 +1154,7 @@ def process_spectrum(
                 nf,
                 None,
                 plot_root / f"{stem}_chunk{chunk_key}_norm.png",
-                title=f"{chunk_key} norm ({args.continuum_mode})",
+                title=f"{chunk_key} norm ({_resolve_continuum_mode(args, 'mask')})",
             )
 
     if not plots_only:
@@ -1087,7 +1167,12 @@ def process_spectrum(
             f = np.array(spec_data[o]["flux"], float)
             e = np.array(spec_data[o]["eflux"], float)
             try:
-                onw, onf, _one = continuum.fit_continuum(w, f, e, **_continuum_fit_kw(args, use_fft_primary))
+                onw, onf, _one = continuum.fit_continuum(
+                    w,
+                    f,
+                    e,
+                    **_continuum_fit_kw(args, use_fft_primary, echelle_order=int(o), lane="template"),
+                )
                 onw, onf, _one = continuum.despike_normalized_pre_ccf(onw, onf, np.ones_like(onf))
             except Exception:
                 continue
@@ -1219,7 +1304,10 @@ def process_spectrum(
             e_raw = np.array(spec_data[o]["eflux"], float)
             try:
                 nw_h, nf_h, _neh = continuum.fit_continuum(
-                    w_raw, f_raw, e_raw, **_continuum_fit_kw(args, use_fft_primary)
+                    w_raw,
+                    f_raw,
+                    e_raw,
+                    **_continuum_fit_kw(args, use_fft_primary, echelle_order=int(o), lane="strong"),
                 )
                 nw_h, nf_h, _neh = continuum.despike_normalized_pre_ccf(nw_h, nf_h, np.ones_like(nf_h))
             except Exception:
@@ -1248,7 +1336,7 @@ def process_spectrum(
                 "chunk_key": "all",
                 "mjd": mjd,
                 "teff": teff_diag,
-                "continuum_mode": args.continuum_mode,
+                "continuum_mode": _resolve_continuum_mode(args, "strong"),
                 "method": "strong_lines",
                 "mask_name": "",
                 "rv_kms": float(_rv_v_line),
@@ -1490,6 +1578,41 @@ def process_spectrum(
     }
 
 
+def configure_blaze_continuum(args: argparse.Namespace, *, parser: argparse.ArgumentParser | None = None) -> None:
+    """Load blaze calibration when split/sinc modes are active (also used outside ``main()``)."""
+    from darkhunter_rv.blaze import BlazeCalibration
+
+    if isinstance(getattr(args, "blaze_calibration", None), BlazeCalibration):
+        return
+    args.blaze_calibration_path = None
+    if bool(getattr(args, "no_blaze_continuum", False)):
+        return
+    if str(getattr(args, "continuum_mode", "split")) not in ("split", "sinc_blaze", "sinc_blaze_only"):
+        return
+    explicit = getattr(args, "blaze_calibration", None)
+    blaze_path = (
+        Path(explicit)
+        if isinstance(explicit, (str, Path)) and Path(explicit).suffix
+        else config.BLAZE_CALIBRATION_FILE
+    )
+    if blaze_path.is_file():
+        args.blaze_calibration = BlazeCalibration.load(blaze_path)
+        args.blaze_calibration_path = blaze_path
+    elif str(getattr(args, "continuum_mode", "split")) in ("sinc_blaze", "sinc_blaze_only"):
+        msg = (
+            f"--continuum-mode {args.continuum_mode} requires blaze calibration at "
+            f"{blaze_path} (build with python -m validation.build_blaze_calibration)"
+        )
+        if parser is not None:
+            parser.error(msg)
+        raise FileNotFoundError(msg)
+    elif str(getattr(args, "continuum_mode", "split")) == "split":
+        logger.warning(
+            "Blaze calibration missing at %s; continuum-mode split falls back to spline on all lanes",
+            blaze_path,
+        )
+
+
 def main(argv: list[str] | None = None) -> None:
     argv = argv if argv is not None else sys.argv[1:]
     parser = argparse.ArgumentParser(description="Dark Hunter echelle RV pipeline")
@@ -1587,7 +1710,27 @@ def main(argv: list[str] | None = None) -> None:
             "are known. Full processing still runs so figures match current code and inputs."
         ),
     )
-    parser.add_argument("--continuum-mode", choices=["spline", "blaze"], default="spline")
+    parser.add_argument(
+        "--continuum-mode",
+        choices=["split", "spline", "blaze", "sinc_blaze", "sinc_blaze_only"],
+        default="split",
+        help=(
+            "split (default): mask CCF uses sinc_blaze_only, template/strong use sinc_blaze when "
+            "calibration/blaze_orders_apf.json is present; spline: legacy envelope only; "
+            "sinc_blaze / sinc_blaze_only: same mode for all lanes"
+        ),
+    )
+    parser.add_argument(
+        "--no-blaze-continuum",
+        action="store_true",
+        help="Force spline continuum on all lanes (ignore blaze calibration even if present).",
+    )
+    parser.add_argument(
+        "--blaze-calibration",
+        type=Path,
+        default=None,
+        help="Per-order sinc² blaze JSON (default: config.BLAZE_CALIBRATION_FILE)",
+    )
     parser.add_argument("--subchunks", type=int, default=1, help="Split each order into N pixel chunks")
     parser.add_argument(
         "--chunk-layout",
@@ -1658,7 +1801,13 @@ def main(argv: list[str] | None = None) -> None:
         args.run_all_methods = False
     if args.plots_only:
         args.plots = True
+
+    args.blaze_calibration = None
+    args.blaze_calibration_path = None
+
     setup_logging(args.log_level, args.quiet)
+    configure_blaze_continuum(args, parser=parser)
+
     if args.write_qc_config:
         qc.ensure_qc_config(Path(args.qc_config))
 
@@ -1671,6 +1820,16 @@ def main(argv: list[str] | None = None) -> None:
     _resolve_chunk_layout(args)
     if args.chunk_layout:
         logger.info("Chunk layout: %s", args.chunk_layout)
+    if getattr(args, "blaze_calibration", None) is not None:
+        n_ord = len(args.blaze_calibration.orders)
+        logger.info(
+            "Blaze calibration: %s (%d orders); continuum-mode=%s mask=%s template/strong=%s",
+            args.blaze_calibration_path,
+            n_ord,
+            args.continuum_mode,
+            _resolve_continuum_mode(args, "mask"),
+            _resolve_continuum_mode(args, "template"),
+        )
     if not args.no_bias:
         bias_path = Path(inst.bias_file) if inst.bias_file else None
         if bias_path and bias_path.is_file():
@@ -1718,8 +1877,8 @@ def main(argv: list[str] | None = None) -> None:
             logger.info("Skipping (up to date): %s", fn)
             continue
         args_f = copy.copy(args)
-        m_g = re.search(r"Gaia_DR3_(\d{18,19})", str(fn))
-        gid: int | None = int(m_g.group(1)) if m_g else None
+        m_g = parse_gaia_id_from_path(fn)
+        gid: int | None = m_g
 
         if gid is not None:
             if gid not in gaia_cache:

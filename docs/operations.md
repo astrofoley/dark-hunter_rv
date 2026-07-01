@@ -118,13 +118,13 @@ STAR_ID=1702370142434513152 bash scripts/refit_star_rvs.sh
 
 Use `python3` (or set `PY=...`) on the server — bare `python` may be Python 2.7. Set `DARKHUNTER_PHOENIX_DIR` if HiRes PHOENIX is not under `~/phoenix/HiResFITS` or `phoenix_models/`.
 
-**Debias:** `bias_statistics.txt` at repo root (one row per **chunk_key**, e.g. `9_2` for subchunks_8). Rebuild after layout changes:
+**Debias:** `bias_statistics.txt` at repo root (one row per **chunk_key**, e.g. `9_2` for subchunks_8). Rebuild after layout changes **or after enabling blaze split continuum** (mask debias must match mask CCF continuum):
 
 ```bash
 bash scripts/rebuild_mask_bias.sh
 ```
 
-See `calibration/mask_lane_deploy.md`. Legacy per-echelle-order rows (integer key `9`) still work as a fallback when a chunk_key is missing.
+Default pipeline uses `--continuum-mode split` with `calibration/blaze_orders_apf.json` (mask: `sinc_blaze_only`, template/strong: `sinc_blaze`). Legacy spline-only: `--no-blaze-continuum` or `--continuum-mode spline`. See `calibration/mask_lane_deploy.md`. Legacy per-echelle-order debias rows (integer key `9`) still work as a fallback when a chunk_key is missing.
 
 ## Daily / cron processing
 
