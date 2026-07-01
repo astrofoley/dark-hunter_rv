@@ -5,26 +5,75 @@ import numpy as np
 import pytest
 from astropy.coordinates import SkyCoord
 from astropy import units as u
+from astropy.time import Time
 
 from darkhunter_rv.apf_observability import (
     ALTITUDE_MIN_DEG,
+    CIRCUMPOLAR_DEC_MIN_DEG,
     HORIZON_DAYS,
     PLOT_HORIZON_DAYS,
     SCAN_HORIZON_DAYS,
     _geometric_min_altitude_deg,
-    _is_circumpolar_for_apf,
+    _is_circumpolar_for_apf_mjd_range,
     compute_apf_observability,
+    normalize_observability_window,
+    window_mjd_bounds,
 )
 from darkhunter_rv.lick_twilight_cache import default_cache_path as default_lick_twilight_cache_path
 
 
-def test_circumpolar_requires_very_high_dec() -> None:
-    # Dec 70° is geometrically circumpolar at Lick but not at airmass 1.7 all night.
+def test_circumpolar_requires_very_high_dec(tmp_path: Path) -> None:
+    from darkhunter_rv.lick_twilight_cache import build_cache_years
+
+    lick = tmp_path / "lick_twilight_cache.json"
+    build_cache_years([2023], cache_path=lick)
+    ref = float(Time("2023-06-15", format="iso", scale="utc").mjd)
+    # Dec 70°: above astronomical floor but not every APF night over a full year.
     coord70 = SkyCoord(ra=180.0 * u.deg, dec=70.0 * u.deg, frame="icrs")
-    assert not _is_circumpolar_for_apf(coord70, 60000.0, 60000.0 + HORIZON_DAYS)
+    assert not _is_circumpolar_for_apf_mjd_range(
+        coord70, ref, ref + 365, lick_cache_path=lick
+    )
 
     coord89 = SkyCoord(ra=180.0 * u.deg, dec=89.0 * u.deg, frame="icrs")
-    assert _is_circumpolar_for_apf(coord89, 60000.0, 60000.0 + 30)
+    assert _is_circumpolar_for_apf_mjd_range(coord89, ref, ref + 30, lick_cache_path=lick)
+
+
+def test_circumpolar_output_has_no_dates(tmp_path: Path) -> None:
+    from darkhunter_rv.lick_twilight_cache import build_cache_years
+
+    lick = tmp_path / "lick_twilight_cache.json"
+    build_cache_years([2023], cache_path=lick)
+    ref = float(Time("2023-06-15", format="iso", scale="utc").mjd)
+    coord = SkyCoord(ra=180.0 * u.deg, dec=89.0 * u.deg, frame="icrs")
+    out = compute_apf_observability(
+        coord,
+        start_mjd=ref,
+        scan_horizon_days=30,
+        plot_horizon_days=30,
+        lick_cache_path=lick,
+    )
+    assert out["circumpolar"] is True
+    assert out["windows"]
+    assert out["next_window_start_date"] == ""
+    assert out["next_window_end_date"] == ""
+
+
+def test_dec_below_lick_lat_never_circumpolar() -> None:
+    coord = SkyCoord(ra=120.0 * u.deg, dec=35.77359 * u.deg, frame="icrs")
+    assert float(coord.dec.deg) < CIRCUMPOLAR_DEC_MIN_DEG
+    out = compute_apf_observability(
+        coord,
+        start_mjd=61192.0,
+        scan_horizon_days=365,
+        lick_cache_path=default_lick_twilight_cache_path(),
+    )
+    assert out["circumpolar"] is False
+    if out.get("windows"):
+        w = out["windows"][0]
+        span = float(Time(w["end_date"], format="iso", scale="utc").mjd) - float(
+            Time(w["start_date"], format="iso", scale="utc").mjd
+        )
+        assert span < 250.0
 
 
 def test_dec_58_not_circumpolar() -> None:
@@ -32,17 +81,6 @@ def test_dec_58_not_circumpolar() -> None:
     assert _geometric_min_altitude_deg(coord) < ALTITUDE_MIN_DEG
     out = compute_apf_observability(coord, start_mjd=61000.0, scan_horizon_days=120, lick_cache_path=default_lick_twilight_cache_path())
     assert out["circumpolar"] is False
-
-
-def test_circumpolar_output_has_no_dates() -> None:
-    coord = SkyCoord(ra=180.0 * u.deg, dec=89.0 * u.deg, frame="icrs")
-    out = compute_apf_observability(
-        coord, start_mjd=60000.0, scan_horizon_days=30, plot_horizon_days=30
-    )
-    assert out["circumpolar"] is True
-    assert out["windows"]
-    assert out["next_window_start_date"] == ""
-    assert out["next_window_end_date"] == ""
 
 
 def test_mid_latitude_single_season_window() -> None:
@@ -68,10 +106,8 @@ def test_airmass_limit_is_17() -> None:
     assert ALTITUDE_MIN_DEG == pytest.approx(36.3, abs=0.5)
 
 
-def test_window_mjd_bounds_prefers_dates_when_mjds_are_stale() -> None:
+def test_window_mjd_bounds_rejects_stale_year_long_dates() -> None:
     from astropy.time import Time
-
-    from darkhunter_rv.apf_observability import window_mjd_bounds
 
     w = {
         "start_date": "2026-06-17",
@@ -80,7 +116,37 @@ def test_window_mjd_bounds_prefers_dates_when_mjds_are_stale() -> None:
         "end_mjd": float(Time("2026-06-18T06:00:00", scale="utc").mjd),
     }
     start, end = window_mjd_bounds(w)
-    assert end - start > 30.0
+    assert end - start < 5.0
+
+
+def test_normalize_repairs_stale_year_long_iso_dates() -> None:
+    from astropy.time import Time
+
+    obs = normalize_observability_window(
+        {
+            "circumpolar": False,
+            "windows": [
+                {
+                    "start_date": "2026-06-17",
+                    "end_date": "2027-06-17",
+                    "start_mjd": float(Time("2026-06-17T20:00:00", scale="utc").mjd),
+                    "end_mjd": float(Time("2026-06-18T06:00:00", scale="utc").mjd),
+                }
+            ],
+        }
+    )
+    assert obs is not None
+    w = obs["windows"][0]
+    assert w["end_date"] != "2027-06-17"
+    assert _season_span_days(w["start_date"], w["end_date"]) < 250.0
+
+
+def _season_span_days(start_date: str, end_date: str) -> float:
+    from astropy.time import Time
+
+    return float(Time(end_date, format="iso", scale="utc").mjd) - float(
+        Time(start_date, format="iso", scale="utc").mjd
+    )
 
 
 def test_normalize_observability_window_repairs_stale_mjds() -> None:

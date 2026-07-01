@@ -11,20 +11,29 @@ from astropy.time import Time
 
 MEDIA_COLUMNS = frozenset({"RV PLOT", "RV FIT", "FLUX PLOT", "SOURCE IMAGE"})
 
-MASS_COLUMNS = ("M2sin i (Msun)", "(M2sin i)/(sin i) (Msun)")
+M2SINI_COLUMN = "M2sin i (Msun)"
+M2SINI_ERR_COLUMN = "M2sin i error (Msun)"
+M2_AT_I_COLUMN = "(M2sin i)/(sin i) (Msun)"
+M2_AT_I_PE_COLUMN = "M2 at i P,e fixed (Msun)"
+MASS_COLUMNS = (M2SINI_COLUMN, M2SINI_ERR_COLUMN, M2_AT_I_COLUMN, M2_AT_I_PE_COLUMN)
 INCLINATION_COLUMN = "INCLINATION (deg)"
-MASS_BLOCK_COLUMNS = MASS_COLUMNS + (INCLINATION_COLUMN,)
+NA_DISPLAY_COLUMNS = frozenset(
+    {INCLINATION_COLUMN, M2_AT_I_COLUMN, M2_AT_I_PE_COLUMN, M2SINI_ERR_COLUMN}
+)
 
 GAIA_DATA_COLUMN = "GAIA DATA"
+N_OBS_COLUMN = "N_obs"
 SCHEDULE_COLUMNS = ("DAYS SINCE LAST APF", "NEXT RV EVENT (DATE)")
+GAIA_SCHEDULE_COLUMNS = (N_OBS_COLUMN,) + SCHEDULE_COLUMNS
 LEGACY_NEXT_RV_MJD = "NEXT RV EVENT (MJD)"
 LEGACY_COLUMN_RENAMES = {LEGACY_NEXT_RV_MJD: "NEXT RV EVENT (DATE)"}
 
 # Inserted immediately after these anchors when rebuilding header order.
 _INSERT_AFTER: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("M2 (Msun)", MASS_BLOCK_COLUMNS),
+    ("ECCENTRICITY", (INCLINATION_COLUMN,)),
+    ("M2 (Msun)", MASS_COLUMNS),
     ("DATA PRODUCTS", (GAIA_DATA_COLUMN,)),
-    (GAIA_DATA_COLUMN, SCHEDULE_COLUMNS),
+    (GAIA_DATA_COLUMN, GAIA_SCHEDULE_COLUMNS),
 )
 
 
@@ -37,6 +46,40 @@ def format_next_rv_event_cell(mjd: Optional[float]) -> str:
     if mjd is None or not np.isfinite(mjd):
         return ""
     return mjd_to_yyyy_mm_dd(float(mjd))
+
+
+def format_optional_mass_cell(value: Optional[float]) -> str:
+    if value is None or not np.isfinite(value) or float(value) <= 0:
+        return "N/A"
+    return f"{float(value):.5f}"
+
+
+def format_optional_inclination_cell(value: Optional[float]) -> str:
+    if value is None or not np.isfinite(value):
+        return "N/A"
+    return f"{float(value):.2f}"
+
+
+def format_optional_error_cell(value: Optional[float]) -> str:
+    if value is None or not np.isfinite(value) or float(value) <= 0:
+        return "N/A"
+    return f"{float(value):.5f}"
+
+
+def coerce_na_display_cell(column: str, value: str) -> str:
+    """Map legacy empty/zero cells to N/A for optional astrometric columns."""
+    if column not in NA_DISPLAY_COLUMNS:
+        return value
+    s = (value or "").strip()
+    if not s or s.upper() == "N/A":
+        return "N/A"
+    try:
+        v = float(s)
+    except ValueError:
+        return s
+    if not np.isfinite(v) or v <= 0:
+        return "N/A"
+    return s
 
 
 def row_dict(hdr: List[str], row: List[str]) -> Dict[str, str]:
@@ -96,7 +139,7 @@ def _ensure_columns_present(hdr: List[str], names: Tuple[str, ...]) -> None:
 
 
 def build_canonical_header(hdr: List[str]) -> List[str]:
-    """Stable column order: mass cols after M2; schedule cols after DATA PRODUCTS."""
+    """Stable column order: inclination after eccentricity; schedule after GAIA DATA."""
     seen = set()
     base: List[str] = []
     for h in hdr:
@@ -110,17 +153,25 @@ def build_canonical_header(hdr: List[str]) -> List[str]:
         _ensure_columns_present(base, names)
     _ensure_columns_present(base, (GAIA_DATA_COLUMN,))
 
+    mass_and_incl = set(MASS_COLUMNS) | {INCLINATION_COLUMN}
+    sched_block = set(GAIA_SCHEDULE_COLUMNS)
+
     out: List[str] = []
+    inserted_incl = False
     inserted_mass = False
     inserted_sched = False
     for h in base:
-        if h in MASS_BLOCK_COLUMNS or h in SCHEDULE_COLUMNS or h == GAIA_DATA_COLUMN:
+        if h in mass_and_incl or h in sched_block or h == GAIA_DATA_COLUMN:
             continue
         if h == LEGACY_NEXT_RV_MJD:
             continue
         out.append(h)
+        if h == "ECCENTRICITY" and not inserted_incl:
+            if INCLINATION_COLUMN in base:
+                out.append(INCLINATION_COLUMN)
+            inserted_incl = True
         if h == "M2 (Msun)" and not inserted_mass:
-            for c in MASS_BLOCK_COLUMNS:
+            for c in MASS_COLUMNS:
                 if c in base:
                     out.append(c)
             inserted_mass = True
@@ -128,17 +179,22 @@ def build_canonical_header(hdr: List[str]) -> List[str]:
             if GAIA_DATA_COLUMN in base and GAIA_DATA_COLUMN not in out:
                 out.append(GAIA_DATA_COLUMN)
             if not inserted_sched:
-                for c in SCHEDULE_COLUMNS:
+                for c in GAIA_SCHEDULE_COLUMNS:
                     if c in base:
                         out.append(c)
                 inserted_sched = True
 
+    if not inserted_incl and INCLINATION_COLUMN in base and INCLINATION_COLUMN not in out:
+        if "ECCENTRICITY" in out:
+            out.insert(out.index("ECCENTRICITY") + 1, INCLINATION_COLUMN)
+        else:
+            out.append(INCLINATION_COLUMN)
     if not inserted_mass:
-        for c in MASS_BLOCK_COLUMNS:
+        for c in MASS_COLUMNS:
             if c in base and c not in out:
                 out.append(c)
     if not inserted_sched:
-        for c in SCHEDULE_COLUMNS:
+        for c in GAIA_SCHEDULE_COLUMNS:
             if c in base and c not in out:
                 out.append(c)
 
@@ -153,7 +209,10 @@ def normalize_data_csv(hdr: List[str], data_rows: List[List[str]]) -> Tuple[List
     Rebuild rows keyed by column name (fixes off-by-one from header-only edits).
     Clears media / stray <img> cells. Returns (new_hdr, n_stray_cleared).
     """
-    _ensure_columns_present(hdr, MASS_BLOCK_COLUMNS + (GAIA_DATA_COLUMN,) + SCHEDULE_COLUMNS)
+    _ensure_columns_present(
+        hdr,
+        MASS_COLUMNS + (INCLINATION_COLUMN, GAIA_DATA_COLUMN) + GAIA_SCHEDULE_COLUMNS,
+    )
     align_rows_to_header(hdr, data_rows)
 
     if LEGACY_NEXT_RV_MJD in hdr and "NEXT RV EVENT (DATE)" in hdr:
@@ -178,6 +237,10 @@ def normalize_data_csv(hdr: List[str], data_rows: List[List[str]]) -> Tuple[List
         r.clear()
         r.extend(new)
     align_rows_to_header(hdr, data_rows)
+    for r in data_rows:
+        for ci, name in enumerate(hdr):
+            if name in NA_DISPLAY_COLUMNS:
+                r[ci] = coerce_na_display_cell(name, r[ci] if ci < len(r) else "")
     clear_media_cells(hdr, data_rows)
     n_stray = clear_stray_plot_html(hdr, data_rows)
     return hdr, n_stray
@@ -206,6 +269,11 @@ def _parse_pipeline_apf_mjds(summary_path: Path) -> List[float]:
             continue
         mjds.append(mjd)
     return mjds
+
+
+def n_apf_obs_from_summary(summary_path: Path) -> int:
+    """Count APF pipeline epochs in a star summary."""
+    return len(_parse_pipeline_apf_mjds(summary_path))
 
 
 def days_since_last_apf_from_summary(summary_path: Path, *, now_mjd: Optional[float] = None) -> Optional[float]:

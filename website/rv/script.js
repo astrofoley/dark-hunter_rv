@@ -15,6 +15,16 @@ const INCLUDE_KECK_ONLY_ROWS = false;
 const KECK_GAIA_IDS = new Set();
 const KECK_TARGETS = new Map();
 const SIMBAD_GAIA_IDS = new Set();
+const SAMPLE_TAG_SETS = {
+    ATF22: new Set(),
+    E24_NS: new Set(),
+    E24_FULL: new Set()
+};
+const SAMPLE_FILTERS = [
+    { key: "ATF22", toggleId: "toggle-sample-atf22", countId: "count-sample-atf22", urlKey: "atf22" },
+    { key: "E24_NS", toggleId: "toggle-sample-e24ns", countId: "count-sample-e24ns", urlKey: "e24ns" },
+    { key: "E24_FULL", toggleId: "toggle-sample-e24full", countId: "count-sample-e24full", urlKey: "e24full" }
+];
 const COMPLETE_ORBIT_DR4_HEADER = "WILL HAVE COMPLETE ORBIT BY DR4";
 const COMPLETE_ORBIT_DR4_LEGACY_HEADER = "WILL HAVE COMPLETE ORBIT BY NOVEMBER";
 const YES_NO_PARAMS = [
@@ -49,8 +59,11 @@ const headerDisplayMap = {
     "M1 (Msun)": "Luminous M1<br>(M<sub>⊙</sub>)",
     "M2 (Msun)": "Dark M2<br>(M<sub>⊙</sub>)",
     "M2sin i (Msun)": "M2 sin i<br>(M<sub>⊙</sub>)",
+    "M2sin i error (Msun)": "M2 sin i err<br>(M<sub>⊙</sub>)",
     "(M2sin i)/(sin i) (Msun)": "M2 at i<br>(M<sub>⊙</sub>)",
+    "M2 at i P,e fixed (Msun)": "M2 at i P,e<br>(M<sub>⊙</sub>)",
     "INCLINATION (deg)": "Inclination<br>(deg)",
+    "N_obs": "N<sub>obs</sub>",
     "RV PLOT": "RV Curve",
     "RV FIT": "RV Fit",
     "FLUX PLOT": "H-beta",
@@ -86,6 +99,9 @@ function parseUrlState() {
         rkeck: false,
         w7apf: false,
         w7keck: false,
+        sampleAtf22: false,
+        sampleE24Ns: false,
+        sampleE24Full: false,
         ranges: {
             RA: ["", ""],
             DEC: ["", ""],
@@ -117,6 +133,9 @@ function parseUrlState() {
     state.rkeck = params.get("rkeck") === "1";
     state.w7apf = params.get("w7apf") === "1";
     state.w7keck = params.get("w7keck") === "1";
+    state.sampleAtf22 = params.get("atf22") === "1";
+    state.sampleE24Ns = params.get("e24ns") === "1";
+    state.sampleE24Full = params.get("e24full") === "1";
 
     const rangeKeys = [
         ["RA", "ra"], ["DEC", "dec"], ["PARALLAX", "parallax"],
@@ -420,7 +439,13 @@ function colIndex(headerName) {
     return Object.prototype.hasOwnProperty.call(colByHeader, headerName) ? colByHeader[headerName] : -1;
 }
 
-const NUMERIC_TABLE_HEADERS = new Set(["DAYS SINCE LAST APF", "INCLINATION (deg)"]);
+const NUMERIC_TABLE_HEADERS = new Set(["DAYS SINCE LAST APF", "INCLINATION (deg)", "N_obs"]);
+const NA_DISPLAY_HEADERS = new Set([
+    "INCLINATION (deg)",
+    "(M2sin i)/(sin i) (Msun)",
+    "M2 at i P,e fixed (Msun)",
+    "M2sin i error (Msun)"
+]);
 const DATE_TABLE_HEADERS = new Set(["NEXT RV EVENT (DATE)", "NEXT RV EVENT (MJD)"]);
 
 function cellAtColumn(row, headerName) {
@@ -600,6 +625,12 @@ function syncUrlState() {
     if (recentKeck && recentKeck.checked) p.set("rkeck", "1");
     if (recentApfWeek && recentApfWeek.checked) p.set("w7apf", "1");
     if (recentKeckWeek && recentKeckWeek.checked) p.set("w7keck", "1");
+    const sampleAtf22 = document.getElementById("toggle-sample-atf22");
+    const sampleE24Ns = document.getElementById("toggle-sample-e24ns");
+    const sampleE24Full = document.getElementById("toggle-sample-e24full");
+    if (sampleAtf22 && sampleAtf22.checked) p.set("atf22", "1");
+    if (sampleE24Ns && sampleE24Ns.checked) p.set("e24ns", "1");
+    if (sampleE24Full && sampleE24Full.checked) p.set("e24full", "1");
     for (let i = 0; i < YES_NO_PARAMS.length; i++) {
         const filterValue = getParamFilterValue(YES_NO_PARAMS[i]);
         if (filterValue) {
@@ -645,6 +676,29 @@ function cleanKeckValue(v) {
         return "--";
     }
     return s;
+}
+
+function loadOptionalSampleTags() {
+    return fetch("tables/sample_tags.json", { cache: "no-store" })
+        .then(response => {
+            if (!response.ok) {
+                return null;
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (!data || typeof data !== "object") {
+                return;
+            }
+            for (const key of Object.keys(SAMPLE_TAG_SETS)) {
+                const ids = data[key];
+                if (!Array.isArray(ids)) {
+                    continue;
+                }
+                SAMPLE_TAG_SETS[key] = new Set(ids.map(id => String(id).trim()).filter(Boolean));
+            }
+        })
+        .catch(() => {});
 }
 
 function loadOptionalKeckCatalog() {
@@ -893,6 +947,28 @@ function rowMatchesFilters(row) {
             return false;
         }
     }
+    const activeSampleKeys = [];
+    for (let i = 0; i < SAMPLE_FILTERS.length; i++) {
+        const cfg = SAMPLE_FILTERS[i];
+        const toggle = document.getElementById(cfg.toggleId);
+        if (toggle && toggle.checked) {
+            activeSampleKeys.push(cfg.key);
+        }
+    }
+    if (activeSampleKeys.length > 0) {
+        const gaiaId = row.dataset.gaiaId || "";
+        let inUnion = false;
+        for (let i = 0; i < activeSampleKeys.length; i++) {
+            const tagSet = SAMPLE_TAG_SETS[activeSampleKeys[i]];
+            if (tagSet && tagSet.has(gaiaId)) {
+                inUnion = true;
+                break;
+            }
+        }
+        if (!inUnion) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -1097,8 +1173,8 @@ async function updateApfRecencyFlags() {
     for (let i = 0; i < rows.length; i++) {
         setCellHtmlForColumn(rows[i], "DATA PRODUCTS", renderDataProductsCell(rows[i]));
         const daysCell = cellAtColumn(rows[i], "DAYS SINCE LAST APF");
-        if (daysCell && row.dataset.apfAgeDays) {
-            daysCell.textContent = String(Math.round(parseFloat(row.dataset.apfAgeDays)));
+        if (daysCell && rows[i].dataset.apfAgeDays) {
+            daysCell.textContent = String(Math.round(parseFloat(rows[i].dataset.apfAgeDays)));
         }
     }
     applyFiltersAndPagination();
@@ -1452,10 +1528,26 @@ function arrayToTable(tableData) {
             }
             if (
                 i > 0
+                && headerName
+                && NA_DISPLAY_HEADERS.has(headerName)
+            ) {
+                const trimmed = String(text ?? "").trim();
+                if (!trimmed || trimmed.toUpperCase() === "N/A") {
+                    text = "N/A";
+                } else {
+                    const num = Number(trimmed);
+                    if (!Number.isFinite(num) || num <= 0) {
+                        text = "N/A";
+                    }
+                }
+            }
+            if (
+                i > 0
                 && colIdx !== 0
                 && !isMediaHeader(headerName)
                 && !NUMERIC_TABLE_HEADERS.has(headerName)
                 && !DATE_TABLE_HEADERS.has(headerName)
+                && !NA_DISPLAY_HEADERS.has(headerName)
                 && !Number.isNaN(Number(text))
             ) {
                 text = Number(text).toFixed(5);
@@ -1784,6 +1876,12 @@ function writeInputs() {
     if (toggleRecentKeck) toggleRecentKeck.checked = initialState.rkeck;
     if (toggleRecentApfWeek) toggleRecentApfWeek.checked = initialState.w7apf;
     if (toggleRecentKeckWeek) toggleRecentKeckWeek.checked = initialState.w7keck;
+    const toggleSampleAtf22 = document.getElementById("toggle-sample-atf22");
+    const toggleSampleE24Ns = document.getElementById("toggle-sample-e24ns");
+    const toggleSampleE24Full = document.getElementById("toggle-sample-e24full");
+    if (toggleSampleAtf22) toggleSampleAtf22.checked = initialState.sampleAtf22;
+    if (toggleSampleE24Ns) toggleSampleE24Ns.checked = initialState.sampleE24Ns;
+    if (toggleSampleE24Full) toggleSampleE24Full.checked = initialState.sampleE24Full;
     for (let i = 0; i < YES_NO_PARAMS.length; i++) {
         if (yesNoToggleControls[i] && typeof yesNoToggleControls[i].value !== "undefined") {
             yesNoToggleControls[i].value = initialState[YES_NO_PARAMS[i].datasetKey] || "";
@@ -1830,6 +1928,12 @@ function writeInputs() {
     if (toggleRecentKeck) toggleRecentKeck.addEventListener("change", () => { currentPage = 1; applyFiltersAndPagination(); });
     if (toggleRecentApfWeek) toggleRecentApfWeek.addEventListener("change", () => { currentPage = 1; applyFiltersAndPagination(); });
     if (toggleRecentKeckWeek) toggleRecentKeckWeek.addEventListener("change", () => { currentPage = 1; applyFiltersAndPagination(); });
+    const toggleSampleAtf22 = document.getElementById("toggle-sample-atf22");
+    const toggleSampleE24Ns = document.getElementById("toggle-sample-e24ns");
+    const toggleSampleE24Full = document.getElementById("toggle-sample-e24full");
+    if (toggleSampleAtf22) toggleSampleAtf22.addEventListener("change", () => { currentPage = 1; applyFiltersAndPagination(); });
+    if (toggleSampleE24Ns) toggleSampleE24Ns.addEventListener("change", () => { currentPage = 1; applyFiltersAndPagination(); });
+    if (toggleSampleE24Full) toggleSampleE24Full.addEventListener("change", () => { currentPage = 1; applyFiltersAndPagination(); });
     for (let i = 0; i < yesNoToggleControls.length; i++) {
         if (yesNoToggleControls[i]) {
             yesNoToggleControls[i].addEventListener("change", () => { currentPage = 1; applyFiltersAndPagination(); });
@@ -1931,6 +2035,7 @@ Promise.all([
             return response.text();
         }),
     loadOptionalKeckCatalog(),
+    loadOptionalSampleTags(),
     loadOptionalSimbadCatalog(),
     refreshLastUpdatedFromWebsiteFiles()
 ])

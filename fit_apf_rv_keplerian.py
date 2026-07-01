@@ -204,10 +204,12 @@ def resolve_observability_window(
     summary_path: Path,
     source_id: Optional[str],
     cache_path: Optional[Path],
+    *,
+    lick_cache_path: Optional[Path] = None,
 ) -> Optional[Dict[str, Any]]:
     """APF shading window: always recomputed from summary coords relative to now."""
     try:
-        lick_cache = lick_twilight_cache_for_observability(cache_path)
+        lick_cache = lick_cache_path or lick_twilight_cache_for_observability(cache_path)
         row = observability_for_summary(summary_path, lick_cache_path=lick_cache)
         if row is not None:
             return normalize_observability_window(
@@ -1036,6 +1038,18 @@ def fit_keplerian(
         "jitter_kms": jitter_fit if jitter_fit > 0 else 0.0,
         "params_raw": params.tolist(),
     }
+    stderr = _stderr_from_least_squares_jacobian(res, len(t), n_fit_params)
+    if stderr is not None and stderr.size >= 2:
+        report["P_days_stderr"] = float(P * stderr[0]) if stderr[0] > 0 else None
+        report["K_kms_stderr"] = float(stderr[1]) if stderr[1] > 0 else None
+        if fix_e is not None:
+            report["e_stderr"] = None
+        elif stderr.size >= 4:
+            h_s, k_s = float(stderr[2]), float(stderr[3])
+            if e > 1e-8:
+                report["e_stderr"] = float(abs((h * h_s + k * k_s) / e))
+            else:
+                report["e_stderr"] = float(np.hypot(h_s, k_s))
     return params, report
 
 
@@ -1066,6 +1080,63 @@ def solve_m2sini_msun(f_mass: float, m1: float) -> float:
         else:
             lo = mid
     return 0.5 * (lo + hi)
+
+
+def _stderr_from_least_squares_jacobian(
+    res: Any,
+    n_data: int,
+    n_params: int,
+) -> Optional[np.ndarray]:
+    jac = getattr(res, "jac", None)
+    if jac is None:
+        return None
+    j = np.asarray(jac, dtype=float)
+    if j.ndim != 2 or j.shape[1] == 0:
+        return None
+    try:
+        cov = np.linalg.pinv(j.T @ j)
+    except np.linalg.LinAlgError:
+        return None
+    rss = 2.0 * float(res.cost)
+    dof = max(1, n_data - n_params)
+    return np.sqrt(np.clip(np.diag(cov) * (rss / dof), 0.0, None))
+
+
+def m2sini_msun_stderr(
+    p_days: float,
+    k_kms: float,
+    e: float,
+    m1_msun: float,
+    *,
+    sig_p_days: Optional[float] = None,
+    sig_k_kms: Optional[float] = None,
+    sig_e: Optional[float] = None,
+) -> Optional[float]:
+    """Propagate P/K/e uncertainties into M2 sin i (Msun) via mass function."""
+    if not all(np.isfinite(x) and x > 0 for x in (p_days, k_kms, m1_msun)):
+        return None
+    if not np.isfinite(e) or e < 0 or e >= 1:
+        return None
+    fm0 = mass_function_msun(float(p_days), float(k_kms), float(e))
+    if not np.isfinite(fm0) or fm0 <= 0:
+        return None
+    m0 = solve_m2sini_msun(float(fm0), float(m1_msun))
+    deltas: List[float] = []
+    if sig_p_days is not None and np.isfinite(sig_p_days) and sig_p_days > 0:
+        fm = mass_function_msun(float(p_days) + float(sig_p_days), float(k_kms), float(e))
+        if np.isfinite(fm) and fm > 0:
+            deltas.append(abs(solve_m2sini_msun(fm, float(m1_msun)) - m0))
+    if sig_k_kms is not None and np.isfinite(sig_k_kms) and sig_k_kms > 0:
+        fm = mass_function_msun(float(p_days), float(k_kms) + float(sig_k_kms), float(e))
+        if np.isfinite(fm) and fm > 0:
+            deltas.append(abs(solve_m2sini_msun(fm, float(m1_msun)) - m0))
+    if sig_e is not None and np.isfinite(sig_e) and sig_e > 0:
+        fm = mass_function_msun(float(p_days), float(k_kms), min(float(e) + float(sig_e), 0.999))
+        if np.isfinite(fm) and fm > 0:
+            deltas.append(abs(solve_m2sini_msun(fm, float(m1_msun)) - m0))
+    if not deltas:
+        return None
+    return float(np.sqrt(sum(d * d for d in deltas)))
 
 
 def solve_m2_with_inclination_msun(f_mass: float, m1: float, inclination_deg: float) -> Optional[float]:
@@ -1406,8 +1477,56 @@ def website_table_masses_from_report(
             report, summary_path=summary_path, gaia_cache=gaia_cache
         ),
         "m2sin_i_msun": m2sin,
+        "m2sin_i_msun_stderr": m2sini_stderr_from_free_report(rep_free, m1),
         "m2_at_i_msun": m2_at_i,
     }
+
+
+def m2sini_stderr_from_free_report(
+    rep_free: Optional[dict],
+    m1_msun: Optional[float],
+) -> Optional[float]:
+    if rep_free is None or m1_msun is None:
+        return None
+    stored = rep_free.get("m2sini_msun_stderr")
+    if isinstance(stored, (int, float)) and np.isfinite(stored) and float(stored) > 0:
+        return float(stored)
+    return m2sini_msun_stderr(
+        float(rep_free["P_days"]),
+        float(rep_free["K_kms"]),
+        float(rep_free["e"]),
+        float(m1_msun),
+        sig_p_days=rep_free.get("P_days_stderr"),
+        sig_k_kms=rep_free.get("K_kms_stderr"),
+        sig_e=rep_free.get("e_stderr"),
+    )
+
+
+def website_table_m2_at_i_pe_fixed_from_report(
+    report: dict,
+    *,
+    summary_path: Optional[Path] = None,
+    gaia_cache: Optional[Dict[str, Any]] = None,
+    table_m1_msun: Optional[float] = None,
+) -> Optional[float]:
+    """M2 at i from fix_period_ecc RV fit and astrometric inclination."""
+    variants = report.get("fit_variants")
+    if not isinstance(variants, dict):
+        return None
+    rep_pe = variants.get("fix_period_ecc")
+    if not isinstance(rep_pe, dict):
+        return None
+    incl = resolve_inclination_deg_for_rv_mass(
+        report, summary_path=summary_path, gaia_cache=gaia_cache
+    )
+    m1 = resolve_m1_msun_for_rv_mass(
+        report,
+        summary_path=summary_path,
+        gaia_cache=gaia_cache,
+        table_m1_msun=table_m1_msun,
+    )
+    _, m2_at_i = rv_only_mass_estimates(rep_pe, m1, incl)
+    return _finite_mass_value(m2_at_i)
 
 
 def rv_only_mass_estimates(
@@ -1992,6 +2111,11 @@ def run_one(
     report["m2sini_msun"] = m2sini
     report["m2_given_inclination_msun"] = m2_at_i
     report["m2_astrometric_msun"] = report["used_m2_msun"]
+    if rep_free is not None and m1_for_masses is not None:
+        err = m2sini_stderr_from_free_report(rep_free, m1_for_masses)
+        if err is not None:
+            report["m2sini_msun_stderr"] = err
+            rep_free["m2sini_msun_stderr"] = err
 
     plot_multi_fit(summary_path, points_fit, fit_variants, report, out_png, m1_msun=m1_for_masses)
     plot_fit_residuals(

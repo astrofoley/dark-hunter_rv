@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -37,6 +37,10 @@ HORIZON_DAYS = SCAN_HORIZON_DAYS
 MERGE_RUN_GAP_DAYS = 12
 # After merge, split if consecutive observable nights are separated by >N days.
 MAX_RUN_NIGHT_GAP_DAYS = 14
+# Astronomical circumpolar floor at Lick (never sets); APF year-round needs higher dec.
+CIRCUMPOLAR_DEC_MIN_DEG = 90.0 - LICK_LAT_DEG
+# Observable seasons longer than this are almost certainly stale cache merges.
+MAX_SEASON_CALENDAR_DAYS = 250.0
 
 
 def reference_now(reference_mjd: Optional[float] = None) -> Tuple[float, str, float]:
@@ -218,11 +222,32 @@ def _sample_nights(
 
 def _is_circumpolar_for_apf(
     coord: SkyCoord,
+    nights: List[NightRecord],
+) -> bool:
+    """
+    APF circumpolar: every scanned nautical night meets observability rules.
+
+    Targets with dec below the astronomical circumpolar limit at Lick can never
+    satisfy year-round APF visibility.
+    """
+    dec_deg = float(coord.dec.deg)
+    if dec_deg < CIRCUMPOLAR_DEC_MIN_DEG - 1e-9:
+        return False
+    if not nights:
+        return False
+    return all(n.observable_night for n in nights)
+
+
+def _is_circumpolar_for_apf_mjd_range(
+    coord: SkyCoord,
     start_mjd: float,
     end_mjd: float,
+    *,
+    lick_cache_path: Optional[Path] = None,
 ) -> bool:
-    del start_mjd, end_mjd
-    return _geometric_min_altitude_deg(coord) >= ALTITUDE_MIN_DEG - 0.5
+    """Sample nights in [start_mjd, end_mjd] and apply per-night APF circumpolar test."""
+    nights = _sample_nights(coord, start_mjd, end_mjd, lick_cache_path=lick_cache_path)
+    return _is_circumpolar_for_apf(coord, nights)
 
 
 def _build_season_runs(nights: List[NightRecord]) -> List[List[NightRecord]]:
@@ -259,12 +284,30 @@ def _merge_close_runs(
 def _run_span(run: List[NightRecord]) -> Tuple[str, str, float, float]:
     start = run[0]
     end = run[-1]
+    start_date = start.calendar_date
+    end_date = _lick_date_from_mjd(end.morning_twilight_mjd)
+    if end_date < start_date:
+        end_date = start_date
+    if start_date == end_date and end.morning_twilight_mjd > start.evening_twilight_mjd + 0.01:
+        try:
+            end_date = (Time(start_date, format="iso", scale="utc").to_datetime(timezone=LICK_TZ).date() + timedelta(days=1)).isoformat()
+        except Exception:
+            pass
     return (
-        start.calendar_date,
-        _lick_date_from_mjd(end.morning_twilight_mjd),
+        start_date,
+        end_date,
         start.evening_twilight_mjd,
         end.morning_twilight_mjd,
     )
+
+
+def _season_calendar_span_days(start_date: str, end_date: str) -> float:
+    try:
+        t0 = float(Time(start_date, format="iso", scale="utc").mjd)
+        t1 = float(Time(end_date, format="iso", scale="utc").mjd)
+        return t1 - t0
+    except Exception:
+        return 0.0
 
 
 def _distance_to_run_mjd(today_mjd: float, run: List[NightRecord]) -> float:
@@ -366,6 +409,9 @@ def window_mjd_bounds(w: dict) -> Tuple[float, float]:
         if mjd_start is not None and mjd_end is not None:
             date_span = date_end - date_start
             mjd_span = mjd_end - mjd_start
+            # Stale cache: year-long ISO dates with one-night twilight MJDs.
+            if date_span > MAX_SEASON_CALENDAR_DAYS and mjd_span < min(date_span * 0.25, 3.0):
+                return mjd_start, mjd_end
             if date_span > 2.0 and mjd_span < min(date_span * 0.25, 3.0):
                 return date_start, date_end
         return date_start, date_end
@@ -401,7 +447,13 @@ def normalize_observability_window(obs: Optional[Dict[str, Any]]) -> Optional[Di
                     me = float(mjd_end)
                     date_span = (date_end - date_start) + 1.0
                     mjd_span = (me - ms) + 1.0
-                    if date_span > 2.0 and mjd_span < min(date_span * 0.25, 3.0):
+                    if date_span > MAX_SEASON_CALENDAR_DAYS and mjd_span < min(date_span * 0.25, 3.0):
+                        w["start_mjd"] = ms
+                        w["end_mjd"] = me
+                        w["end_date"] = _lick_date_from_mjd(me)
+                        if w["end_date"] < w["start_date"]:
+                            w["end_date"] = w["start_date"]
+                    elif date_span > 2.0 and mjd_span < min(date_span * 0.25, 3.0):
                         w["start_mjd"] = date_start
                         w["end_mjd"] = date_end
             except Exception:
@@ -437,7 +489,10 @@ def compute_apf_observability(
     plot_end_mjd = now_mjd + float(plot_horizon_days)
     scan_end_mjd = now_mjd + float(scan_horizon_days)
 
-    if _is_circumpolar_for_apf(coord, now_mjd, scan_end_mjd):
+    nights = _sample_nights(coord, today_start_mjd, scan_end_mjd, lick_cache_path=lick_cache_path)
+    nights_future = [n for n in nights if n.calendar_date >= today_iso]
+
+    if _is_circumpolar_for_apf(coord, nights_future):
         win = ObsWindow(now_mjd, plot_end_mjd, "", "")
         return {
             "circumpolar": True,
@@ -446,14 +501,15 @@ def compute_apf_observability(
             "next_window_end_date": "",
         }
 
-    nights = _sample_nights(coord, today_start_mjd, scan_end_mjd, lick_cache_path=lick_cache_path)
-    nights = [n for n in nights if n.calendar_date >= today_iso]
-    season = _find_best_window(nights, now_mjd)
+    season = _find_best_window(nights_future, now_mjd)
 
     if season is None:
         return {"circumpolar": False, "windows": []}
 
     start_date, end_date, start_mjd_win, end_mjd_win = season
+    if _season_calendar_span_days(start_date, end_date) > MAX_SEASON_CALENDAR_DAYS:
+        end_date = _lick_date_from_mjd(end_mjd_win)
+        start_date = _lick_date_from_mjd(start_mjd_win)
     win = ObsWindow(start_mjd_win, end_mjd_win, start_date, end_date)
     return normalize_observability_window(
         {

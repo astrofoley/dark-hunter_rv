@@ -15,7 +15,7 @@ from pathlib import Path
 
 from astropy.time import Time
 
-from darkhunter_rv.apf_observability import observability_for_summary
+from darkhunter_rv.apf_observability import observability_for_summary, normalize_observability_window
 from darkhunter_rv.lick_twilight_cache import default_cache_path as default_lick_cache_path, load_cache
 from darkhunter_rv.website_table_csv import gaia_id_from_row
 from darkhunter_rv.summary_paths import discover_summary_path
@@ -118,10 +118,23 @@ def main() -> int:
             print(f"[{idx}/{n_ids}] {sid}: not observable in scan horizon", flush=True)
             continue
         entry = {k: v for k, v in row.items() if k != "gaia_source_id"}
+        entry = normalize_observability_window(entry) or entry
         cache[sid] = entry
         built += 1
         win = entry.get("next_window_start_date", "")
         end = entry.get("next_window_end_date", "")
+        circ = entry.get("circumpolar", False)
+        if win and end and win == end:
+            print(f"[{idx}/{n_ids}] {sid}: WARNING same-day window {win}", flush=True)
+        elif win and end and not circ:
+            try:
+                span = float(Time(end, format="iso", scale="utc").mjd) - float(
+                    Time(win, format="iso", scale="utc").mjd
+                )
+                if span > 250.0:
+                    print(f"[{idx}/{n_ids}] {sid}: WARNING long window {win} to {end}", flush=True)
+            except Exception:
+                pass
         print(f"[{idx}/{n_ids}] {sid}: {win} to {end}", flush=True)
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)

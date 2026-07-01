@@ -69,6 +69,7 @@ Ensure Apache serves `/var/www/html/darkhunter/rv/` (existing `Alias` or symlink
 | **DATA PRODUCTS** | APF / KPF / Swift product links (instrument trees) |
 | **GAIA DATA** | Link to `stars/Gaia_DR3_<id>/Gaia/` (star file directory) |
 | **SOURCE IMAGE** | UV image from legacy CSV (restored; not hidden) |
+| **N_obs** | Count of APF pipeline epochs in the star summary |
 | **DAYS SINCE LAST APF** | Days since latest APF pipeline epoch (sortable; drives &lt;7d / &lt;30d filters) |
 | **NEXT RV EVENT (DATE)** | Sooner of next max/min RV from **P & e fixed** fit, as `YYYY/MM/DD` (legacy `NEXT RV EVENT (MJD)` column is merged away on repair) |
 
@@ -76,13 +77,18 @@ Ensure Apache serves `/var/www/html/darkhunter/rv/` (existing `Alias` or symlink
 
 | Column | Meaning |
 |--------|---------|
+| **ECCENTRICITY** | Catalog eccentricity |
+| **INCLINATION (deg)** | Astrometric i (Gaia NSS or Thiele-Innes); `N/A` if unknown or edge-on |
 | **M1 (Msun)** | Luminous primary mass (catalog); **used first** for RV-derived M2 sin i / M2 at i |
 | **M2 (Msun)** | Gaia NSS astrometric secondary mass (`used_m2_msun`), not from the RV fit |
 | **M2sin i (Msun)** | RV-only Keplerian fit f(M) with table M1 |
-| **(M2sin i)/(sin i) (Msun)** | Same f(M) and M1 with Gaia astrometric inclination |
-| **INCLINATION (deg)** | Astrometric i used for M2 at i (from Gaia NSS or derived from Thiele-Innes A,B,F,G when the database field is empty; empty if unknown or edge-on) |
+| **M2sin i error (Msun)** | Uncertainty on M2 sin i from the RV-only fit (P/K/e Jacobian propagation) |
+| **(M2sin i)/(sin i) (Msun)** | Same f(M) and M1 with Gaia astrometric inclination; `N/A` without valid i |
+| **M2 at i P,e fixed (Msun)** | M2 at i from **P & e fixed** RV fit and astrometric i; `N/A` without valid i |
 
-**RV fit plots:** blue shaded regions mark the current APF visibility season at Lick (nautical twilight −12°; airmass ≤ 1.7 for ≥30 min/night while the sun is at/below twilight; short gaps merged). One window per target; season search scans up to one year ahead, plot shading capped at 90 days past today. Built via `scripts/build_apf_observability_cache.py` and stored in `rv_fit_reports/observability_windows_cache.json`. Only targets observable on every nautical night in the scan are labeled circumpolar (no dates).
+**RV fit plots:** blue shaded regions mark the current APF visibility season at Lick (nautical twilight −12°; airmass ≤ 1.7 for ≥30 min/night). **RV Curve** plots (`plot_rv_from_summaries.py`) include the same shading from summary RA/Dec even when there are zero APF epochs or no Keplerian fit. Circumpolar = observable on **every** scanned nautical night under those rules (requires dec &gt; 52.66° at Lick). Stale year-long cache dates are repaired at plot time via `window_mjd_bounds`.
+
+**Sample filters:** checkboxes ATF22 / E24 NS / E24 Full (union when multiple checked); membership in `tables/sample_tags.json`.
 
 ## Three commands (ziggy)
 

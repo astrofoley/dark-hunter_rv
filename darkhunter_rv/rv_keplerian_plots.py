@@ -390,21 +390,24 @@ def plot_rv_data_only(
     *,
     title_prefix: str = "RV data",
 ) -> None:
-    """Our telescope epochs only; Today + APF window markers."""
+    """Our telescope epochs only; Today + APF window markers (zero epochs OK)."""
     pts = our_telescope_points(points)
-    if len(pts) < 1:
-        raise ValueError("need at least 1 our-telescope point for data plot")
-
-    t = np.array([p.mjd for p in pts], dtype=float)
-    y = np.array([p.rv for p in pts], dtype=float)
+    if len(pts) >= 1:
+        t = np.array([p.mjd for p in pts], dtype=float)
+        y = np.array([p.rv for p in pts], dtype=float)
+    else:
+        t = np.array([], dtype=float)
+        y = np.array([], dtype=float)
     t_lo, t_hi = _xlim_from_data(t, report)
     now_mjd = float(report.get("now_mjd", Time.now().mjd))
 
     fig, ax = plt.subplots(figsize=(10.5, 4.9))
-    yerr = _fitmod().effective_yerr_for_points(pts, report)
-    _plot_points(ax, pts, include_literature=False, yerr=yerr)
-
-    y_lim = _y_limits_data_and_models(t, y, [])
+    if len(pts) >= 1:
+        yerr = _fitmod().effective_yerr_for_points(pts, report)
+        _plot_points(ax, pts, include_literature=False, yerr=yerr)
+        y_lim = _y_limits_data_and_models(t, y, [])
+    else:
+        y_lim = (-10.0, 10.0)
     ax.set_ylim(*y_lim)
     y_top_in = y_lim[1] - 0.02 * (y_lim[1] - y_lim[0])
     _mark_time_reference(ax, report, t_lo, t_hi, y_top_in, annotate=True)
@@ -415,7 +418,8 @@ def plot_rv_data_only(
     ax.set_title(f"{title_prefix}: Gaia DR3 {sid}")
     ax.set_xlim(t_lo, t_hi)
     _style_rv_axes(ax)
-    ax.legend(loc="best", fontsize=8.5)
+    if len(pts) >= 1:
+        ax.legend(loc="best", fontsize=8.5)
 
     out_png.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()

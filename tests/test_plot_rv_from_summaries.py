@@ -57,6 +57,20 @@ def test_build_plot_uses_fit_json_observability_fallback(tmp_path: Path) -> None
     assert obs["windows"][0]["start_date"] == "2026-08-14"
 
 
+def test_build_plot_zero_epochs_with_coords(tmp_path: Path) -> None:
+    from darkhunter_rv.lick_twilight_cache import build_cache_years
+
+    lick = tmp_path / "lick_twilight_cache.json"
+    build_cache_years([2026], cache_path=lick)
+    summ = tmp_path / "Gaia_DR3_111_summary.txt"
+    summ.write_text("[GAIA METADATA]\nSource_ID: 111\nRA: 120.0\nDec: 20.0\n\n[PIPELINE RESULTS]\n# hdr\n")
+    out_png = tmp_path / "Gaia_DR3_111_rv_plot.png"
+    assert rvplot.build_plot(summ, out_png, lick_cache=lick) is True
+    assert out_png.is_file()
+    report = rvplot.minimal_report([], summary_path=summ, obs_cache=None, reports_dir=None, lick_cache=lick)
+    assert report.get("observability_window") is not None
+
+
 def test_build_plot_single_epoch(tmp_path: Path) -> None:
     summ = tmp_path / "Gaia_DR3_111_summary.txt"
     _write_summary(summ, n_epochs=1)

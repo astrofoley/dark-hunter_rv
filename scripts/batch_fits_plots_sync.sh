@@ -159,6 +159,7 @@ if [[ "$RUN_RV_PLOTS" == "1" ]]; then
     --plots-root "$OUT"
     --reports-dir "$REPORTS_DIR"
     --observability-cache "$REPORTS_DIR/observability_windows_cache.json"
+    --lick-cache "$REPORTS_DIR/lick_twilight_cache.json"
   )
   if [[ -n "$STAR_ID" ]]; then
     plot_args+=(--star-id "$STAR_ID")

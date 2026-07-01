@@ -36,6 +36,7 @@ def replot_from_fit_json(
     out_dir: Path,
     reports_dir: Path,
     obs_cache: Path | None,
+    lick_cache: Path | None = None,
 ) -> bool:
     gid = fit_json.stem.replace("_keplerian_fit", "")
     summ = out_dir / f"Gaia_DR3_{gid}_summary.txt"
@@ -50,7 +51,9 @@ def replot_from_fit_json(
         print(f"[skip] {gid}: no stored fit_variants")
         return False
 
-    report["observability_window"] = resolve_observability_window(summ, gid, obs_cache)
+    report["observability_window"] = resolve_observability_window(
+        summ, gid, obs_cache, lick_cache_path=lick_cache
+    )
     report["now_mjd"] = float(Time.now().mjd)
 
     points_fit = _finite_points(summ)
@@ -64,8 +67,7 @@ def replot_from_fit_json(
         summ, points_fit, fit_variants, report, reports_dir / f"{gid}_keplerian_residuals.png", m1_msun=m1
     )
     ours = our_telescope_points(points_fit)
-    if len(ours) >= 1:
-        plot_rv_data_only(summ, ours, report, star_dir / f"Gaia_DR3_{gid}_rv_plot.png")
+    plot_rv_data_only(summ, ours, report, star_dir / f"Gaia_DR3_{gid}_rv_plot.png")
 
     for name in (f"{gid}_keplerian_fit.png", f"{gid}_keplerian_residuals.png"):
         src = reports_dir / name
@@ -88,6 +90,7 @@ def main() -> int:
     ap.add_argument("--output-dir", default=None, help="Pipeline output (default: REPO/output)")
     ap.add_argument("--reports-dir", default=None, help="Fit reports (default: REPO/rv_fit_reports)")
     ap.add_argument("--observability-cache", default=None, help="observability_windows_cache.json path")
+    ap.add_argument("--lick-cache", default=None, help="Lick twilight JSON path")
     ap.add_argument("--star-id", default=None, help="Optional single Gaia DR3 id")
     ap.add_argument(
         "--also-summaries-without-fits",
@@ -100,6 +103,7 @@ def main() -> int:
     out_dir = Path(args.output_dir) if args.output_dir else repo / "output"
     reports_dir = Path(args.reports_dir) if args.reports_dir else repo / "rv_fit_reports"
     obs_cache = Path(args.observability_cache) if args.observability_cache else reports_dir / "observability_windows_cache.json"
+    lick_cache = Path(args.lick_cache) if args.lick_cache else obs_cache.parent / "lick_twilight_cache.json"
 
     fit_jsons = sorted(reports_dir.glob("*_keplerian_fit.json"))
     if args.star_id:
@@ -107,7 +111,9 @@ def main() -> int:
 
     ok = skip = 0
     for fit_json in fit_jsons:
-        if replot_from_fit_json(fit_json, out_dir=out_dir, reports_dir=reports_dir, obs_cache=obs_cache):
+        if replot_from_fit_json(
+            fit_json, out_dir=out_dir, reports_dir=reports_dir, obs_cache=obs_cache, lick_cache=lick_cache
+        ):
             ok += 1
             if ok % 25 == 0:
                 print(f"... replotted {ok}", flush=True)
@@ -133,7 +139,9 @@ def main() -> int:
             if args.star_id and sid != str(args.star_id):
                 continue
             out_png = out_dir / f"Gaia_DR3_{sid}" / f"Gaia_DR3_{sid}_rv_plot.png"
-            if build_plot(summ, out_png, obs_cache=obs_cache, reports_dir=reports_dir):
+            if build_plot(
+                summ, out_png, obs_cache=obs_cache, reports_dir=reports_dir, lick_cache=lick_cache
+            ):
                 extra += 1
         print(f"RV data plots for summaries without fits: {extra}")
 
