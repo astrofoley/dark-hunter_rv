@@ -20,6 +20,7 @@ from darkhunter_rv.summary_paths import (
     is_primary_epoch_spectrum_name,
     parse_object_id_from_summary,
 )
+from darkhunter_rv.website_plot_sync import maybe_stage_gaia_plots, resolve_web_root
 
 
 def _epoch_rows(summary_path: Path) -> list[tuple[float, str]]:
@@ -205,11 +206,25 @@ def main() -> int:
         help="Spectrum search root (repeatable). Default: SPEC_ROOT env or /data2/gaia_stars/apf_reductions",
     )
     ap.add_argument("--star-id", default=None)
+    ap.add_argument("--reports-dir", default=None, help="Keplerian reports dir (residuals fallback when staging)")
+    ap.add_argument(
+        "--web-root",
+        default=None,
+        help="Website root for auto-staging plots (default: WEB_ROOT env)",
+    )
+    ap.add_argument(
+        "--no-sync-website",
+        action="store_true",
+        help="Do not copy plots into WEB_ROOT/stars/.../Gaia/Plots/",
+    )
     args = ap.parse_args()
 
     summary_dir = Path(args.summary_dir)
     plots_root = Path(args.plots_root)
     spec_roots = [Path(p) for p in args.spec_root]
+    web_root = resolve_web_root(args.web_root, sync_enabled=not args.no_sync_website)
+    repo = Path(__file__).resolve().parents[1]
+    reports_dir = Path(args.reports_dir) if args.reports_dir else repo / "rv_fit_reports"
     if not spec_roots:
         env_root = os.environ.get("SPEC_ROOT", "/data2/gaia_stars/apf_reductions")
         spec_roots = [Path(env_root), summary_dir, summary_dir.parent]
@@ -237,6 +252,13 @@ def main() -> int:
         if build_overlay(epochs, summ, spec_roots, out_png, gaia_id=sid):
             built += 1
             print(f"Built Hβ overlay for Gaia_DR3_{sid} -> {out_png}")
+            if web_root is not None:
+                maybe_stage_gaia_plots(
+                    sid,
+                    plot_dir,
+                    web_root=web_root,
+                    reports_dir=reports_dir,
+                )
         else:
             skipped += 1
             print(f"[WARN] Hβ overlay skipped for Gaia_DR3_{sid} (epochs={len(epochs)}, spec_roots={spec_roots})")

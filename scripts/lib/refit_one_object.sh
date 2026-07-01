@@ -132,6 +132,7 @@ if [[ "$RUN_RV_PLOTS" == "1" ]]; then
     --reports-dir "$REPORTS_DIR" \
     --observability-cache "$REPORTS_DIR/observability_windows_cache.json" \
     --lick-cache "$REPORTS_DIR/lick_twilight_cache.json" \
+    --web-root "$WEB_ROOT" \
     --star-id "$gid" \
     || echo "[WARN] RV data plot failed for Gaia_DR3_${gid} (continuing)"
 fi
@@ -141,6 +142,8 @@ if [[ "$RUN_HBETA" == "1" ]]; then
     --summary-dir "$OUT" \
     --plots-root "$OUT" \
     --spec-root "$SPEC_ROOT" \
+    --reports-dir "$REPORTS_DIR" \
+    --web-root "$WEB_ROOT" \
     --star-id "$gid" \
     || echo "[WARN] Hβ plot failed for Gaia_DR3_${gid} (continuing)"
 fi

@@ -160,6 +160,7 @@ if [[ "$RUN_RV_PLOTS" == "1" ]]; then
     --reports-dir "$REPORTS_DIR"
     --observability-cache "$REPORTS_DIR/observability_windows_cache.json"
     --lick-cache "$REPORTS_DIR/lick_twilight_cache.json"
+    --web-root "$WEB_ROOT"
   )
   if [[ -n "$STAR_ID" ]]; then
     plot_args+=(--star-id "$STAR_ID")
@@ -174,6 +175,8 @@ if [[ "$RUN_HBETA_PLOTS" == "1" ]]; then
     --summary-dir "$OUT"
     --plots-root "$OUT"
     --spec-root "${SPEC_ROOT:-/data2/gaia_stars/apf_reductions}"
+    --reports-dir "$REPORTS_DIR"
+    --web-root "$WEB_ROOT"
   )
   if [[ -n "$STAR_ID" ]]; then
     hbeta_args+=(--star-id "$STAR_ID")

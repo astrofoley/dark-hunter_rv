@@ -17,6 +17,7 @@ from astropy.time import Time
 from darkhunter_rv.apf_observability import _target_coord_from_summary, normalize_observability_window
 from darkhunter_rv.rv_keplerian_plots import our_telescope_points, plot_rv_data_only
 from darkhunter_rv.summary_paths import discover_summary_files, discover_summary_path, parse_object_id_from_summary
+from darkhunter_rv.website_plot_sync import maybe_stage_gaia_plots, resolve_web_root
 from fit_apf_rv_keplerian import parse_summary, resolve_observability_window
 
 
@@ -112,6 +113,16 @@ def main() -> int:
         default=None,
         help="Lick twilight JSON (default: sibling of observability cache or repo default)",
     )
+    ap.add_argument(
+        "--web-root",
+        default=None,
+        help="Website root for auto-staging plots (default: WEB_ROOT env, e.g. /var/www/html/darkhunter/rv)",
+    )
+    ap.add_argument(
+        "--no-sync-website",
+        action="store_true",
+        help="Do not copy plots into WEB_ROOT/stars/.../Gaia/Plots/",
+    )
     args = ap.parse_args()
 
     summary_dir = Path(args.summary_dir)
@@ -119,6 +130,7 @@ def main() -> int:
     obs_cache = Path(args.observability_cache) if args.observability_cache else None
     reports_dir = Path(args.reports_dir) if args.reports_dir else None
     lick_cache = Path(args.lick_cache) if args.lick_cache else None
+    web_root = resolve_web_root(args.web_root, sync_enabled=not args.no_sync_website)
 
     if args.star_id:
         summ = discover_summary_path(summary_dir, str(args.star_id))
@@ -145,6 +157,13 @@ def main() -> int:
             lick_cache=lick_cache,
         ):
             built += 1
+            if sid and web_root is not None:
+                maybe_stage_gaia_plots(
+                    sid,
+                    plots_root / f"Gaia_DR3_{sid}",
+                    web_root=web_root,
+                    reports_dir=reports_dir,
+                )
         else:
             skipped += 1
     print(f"Built {built} summary-based RV data plots (skipped {skipped}).")

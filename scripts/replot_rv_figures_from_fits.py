@@ -23,6 +23,7 @@ from darkhunter_rv.rv_keplerian_plots import (
     plot_rv_data_only,
 )
 from darkhunter_rv.summary_paths import discover_summary_files, parse_object_id_from_summary
+from darkhunter_rv.website_plot_sync import maybe_stage_gaia_plots, resolve_web_root
 from fit_apf_rv_keplerian import parse_summary, resolve_observability_window
 
 
@@ -98,6 +99,16 @@ def main() -> int:
         action="store_true",
         help="Build RV data plots for summaries that lack fit JSON",
     )
+    ap.add_argument(
+        "--web-root",
+        default=None,
+        help="Website root for auto-staging plots (default: WEB_ROOT env)",
+    )
+    ap.add_argument(
+        "--no-sync-website",
+        action="store_true",
+        help="Do not copy plots into WEB_ROOT/stars/.../Gaia/Plots/",
+    )
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parents[1]
@@ -105,6 +116,7 @@ def main() -> int:
     reports_dir = Path(args.reports_dir) if args.reports_dir else repo / "rv_fit_reports"
     obs_cache = Path(args.observability_cache) if args.observability_cache else reports_dir / "observability_windows_cache.json"
     lick_cache = Path(args.lick_cache) if args.lick_cache else obs_cache.parent / "lick_twilight_cache.json"
+    web_root = resolve_web_root(args.web_root, sync_enabled=not args.no_sync_website)
 
     fit_jsons = sorted(reports_dir.glob("*_keplerian_fit.json"))
     if args.star_id:
@@ -112,10 +124,13 @@ def main() -> int:
 
     ok = skip = 0
     for fit_json in fit_jsons:
+        gid = fit_json.stem.replace("_keplerian_fit", "")
         if replot_from_fit_json(
             fit_json, out_dir=out_dir, reports_dir=reports_dir, obs_cache=obs_cache, lick_cache=lick_cache
         ):
             ok += 1
+            if web_root is not None:
+                maybe_stage_gaia_plots(gid, out_dir / f"Gaia_DR3_{gid}", web_root=web_root, reports_dir=reports_dir)
             if ok % 25 == 0:
                 print(f"... replotted {ok}", flush=True)
         else:
@@ -144,6 +159,8 @@ def main() -> int:
                 summ, out_png, obs_cache=obs_cache, reports_dir=reports_dir, lick_cache=lick_cache
             ):
                 extra += 1
+                if web_root is not None and sid:
+                    maybe_stage_gaia_plots(sid, out_dir / f"Gaia_DR3_{sid}", web_root=web_root, reports_dir=reports_dir)
         print(f"RV data plots for summaries without fits: {extra}")
 
     print(f"Done: replotted={ok} skipped={skip}")

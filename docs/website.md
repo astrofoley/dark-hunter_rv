@@ -88,6 +88,8 @@ Ensure Apache serves `/var/www/html/darkhunter/rv/` (existing `Alias` or symlink
 
 **RV fit plots:** blue shaded regions mark the current APF visibility season at Lick (nautical twilight −12°; airmass ≤ 1.7 for ≥30 min/night). **RV Curve** plots (`plot_rv_from_summaries.py`) include the same shading from summary RA/Dec even when there are zero APF epochs or no Keplerian fit. Circumpolar = observable on **every** scanned nautical night under those rules (requires dec &gt; 52.66° at Lick). Stale year-long cache dates are repaired at plot time via `window_mjd_bounds`.
 
+Plot scripts (`plot_rv_from_summaries.py`, `build_hbeta_website_plots.py`, `replot_rv_figures_from_fits.py`) **auto-copy** contract PNGs into `WEB_ROOT/stars/Gaia_DR3_<id>/Gaia/Plots/` when `WEB_ROOT` is set (or pass `--web-root`). Use `--no-sync-website` to skip. Pipeline output under `output/Gaia_DR3_<id>/` remains the canonical build tree; the website copy is updated immediately after each plot is written.
+
 **Sample filters:** checkboxes ATF22 / E24 NS / E24 Full (union when multiple checked); membership in `tables/sample_tags.json`.
 
 ## Three commands (ziggy)
