@@ -200,6 +200,64 @@ def test_season_window_not_full_scan_year() -> None:
         assert date_span < 250.0, (ra, dec, w["start_date"], w["end_date"])
 
 
+def test_trim_run_calendar_span_caps_scan_horizon_merge() -> None:
+    from astropy.time import Time
+
+    from darkhunter_rv.apf_observability import (
+        MAX_SEASON_CALENDAR_DAYS,
+        NightRecord,
+        _trim_run_calendar_span,
+    )
+
+    ref_mjd = float(Time("2026-07-01T12:00:00", scale="utc").mjd)
+    today_start = float(Time("2026-07-01", format="iso", scale="utc").mjd)
+    year_run: list[NightRecord] = []
+    for day in range(365):
+        eve = today_start + float(day) + 0.75
+        year_run.append(
+            NightRecord(
+                evening_twilight_mjd=eve,
+                morning_twilight_mjd=eve + 0.4,
+                calendar_date=Time(eve, format="mjd").to_datetime().date().isoformat(),
+                observable_night=True,
+            )
+        )
+    trimmed = _trim_run_calendar_span(
+        year_run,
+        today_mjd=ref_mjd,
+        today_start_mjd=today_start,
+    )
+    assert trimmed
+    start_date = trimmed[0].calendar_date
+    end_date = Time(trimmed[-1].morning_twilight_mjd, format="mjd").to_datetime().date().isoformat()
+    span = float(Time(end_date, format="iso", scale="utc").mjd) - float(
+        Time(start_date, format="iso", scale="utc").mjd
+    )
+    assert span <= MAX_SEASON_CALENDAR_DAYS
+    assert trimmed[0].evening_twilight_mjd >= today_start - 0.5
+
+
+def test_compute_window_from_july_reference_not_full_year(tmp_path: Path) -> None:
+    from astropy.time import Time
+
+    from darkhunter_rv.lick_twilight_cache import build_cache_years
+
+    lick_cache = tmp_path / "lick_twilight_cache.json"
+    build_cache_years([2026, 2027], cache_path=lick_cache)
+    ref = float(Time("2026-07-01T12:00:00", scale="utc").mjd)
+    out = compute_apf_observability(
+        SkyCoord(ra=120.0 * u.deg, dec=20.0 * u.deg),
+        start_mjd=ref,
+        scan_horizon_days=365,
+        lick_cache_path=lick_cache,
+    )
+    assert out.get("windows")
+    w = out["windows"][0]
+    span = _season_span_days(w["start_date"], w["end_date"])
+    assert span < 250.0, (w["start_date"], w["end_date"])
+    assert w["start_date"] >= "2026-07-01"
+
+
 def test_full_year_scan_is_fast(tmp_path: Path) -> None:
     from darkhunter_rv.lick_twilight_cache import build_cache_years
 

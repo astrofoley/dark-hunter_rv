@@ -347,11 +347,67 @@ def _all_season_runs(nights: List[NightRecord]) -> List[List[NightRecord]]:
     return out
 
 
+def _trim_run_calendar_span(
+    run: List[NightRecord],
+    *,
+    today_mjd: float,
+    today_start_mjd: float,
+    max_calendar_days: float = MAX_SEASON_CALENDAR_DAYS,
+) -> List[NightRecord]:
+    """Cap an oversized merged run to one observable season near today."""
+    if not run:
+        return run
+    start_date, end_date, _, _ = _run_span(run)
+    if _season_calendar_span_days(start_date, end_date) <= max_calendar_days:
+        return run
+
+    pieces = _split_run_at_night_gaps(run)
+    candidate_runs = pieces if pieces else [run]
+    containing = [
+        piece
+        for piece in candidate_runs
+        if piece[0].evening_twilight_mjd <= today_mjd <= piece[-1].morning_twilight_mjd + 1.0
+    ]
+    if containing:
+        chosen = containing[0]
+    else:
+        future = [
+            piece
+            for piece in candidate_runs
+            if piece[-1].morning_twilight_mjd >= today_start_mjd - 0.5
+        ]
+        pool = future if future else candidate_runs
+        chosen = min(pool, key=lambda piece: _distance_to_run_mjd(today_mjd, piece))
+
+    start_date, end_date, _, _ = _run_span(chosen)
+    if _season_calendar_span_days(start_date, end_date) <= max_calendar_days:
+        return chosen
+
+    # Observable on most nights in the scan horizon: cap forward from today.
+    cap_end_mjd = today_start_mjd + max_calendar_days
+    trimmed = [
+        night
+        for night in chosen
+        if today_start_mjd - 0.5 <= night.evening_twilight_mjd <= cap_end_mjd
+    ]
+    if trimmed:
+        return trimmed
+    trimmed = [night for night in chosen if night.evening_twilight_mjd >= today_start_mjd - 0.5]
+    if trimmed:
+        cap_end_mjd = trimmed[0].evening_twilight_mjd + max_calendar_days
+        return [night for night in trimmed if night.evening_twilight_mjd <= cap_end_mjd] or trimmed[:1]
+    return chosen[:1]
+
+
 def _find_best_window(
     nights: List[NightRecord],
     today_mjd: float,
+    *,
+    today_start_mjd: Optional[float] = None,
 ) -> Optional[Tuple[str, str, float, float]]:
     """Observable season closest to today (not a scan-horizon-spanning merge)."""
+    if today_start_mjd is None:
+        today_start_mjd = float(Time(_lick_date_from_mjd(today_mjd), format="iso", scale="utc").mjd)
     runs = _all_season_runs(nights)
     runs = [run for run in runs if run[-1].morning_twilight_mjd >= today_mjd - 0.5]
     if not runs:
@@ -362,6 +418,11 @@ def _find_best_window(
             _distance_to_run_mjd(today_mjd, run),
             run[0].evening_twilight_mjd,
         ),
+    )
+    best = _trim_run_calendar_span(
+        best,
+        today_mjd=today_mjd,
+        today_start_mjd=today_start_mjd,
     )
     return _run_span(best)
 
@@ -502,7 +563,11 @@ def compute_apf_observability(
             "next_window_end_date": "",
         }
 
-    season = _find_best_window(nights_forward, now_mjd)
+    season = _find_best_window(
+        nights_forward,
+        now_mjd,
+        today_start_mjd=today_start_mjd,
+    )
 
     if season is None:
         return {"circumpolar": False, "windows": []}
@@ -511,9 +576,6 @@ def compute_apf_observability(
     if start_mjd_win < today_start_mjd - 0.01 and end_mjd_win >= now_mjd:
         start_mjd_win = today_start_mjd
         start_date = today_iso
-    if _season_calendar_span_days(start_date, end_date) > MAX_SEASON_CALENDAR_DAYS:
-        end_date = _lick_date_from_mjd(end_mjd_win)
-        start_date = _lick_date_from_mjd(start_mjd_win)
     win = ObsWindow(start_mjd_win, end_mjd_win, start_date, end_date)
     return normalize_observability_window(
         {
