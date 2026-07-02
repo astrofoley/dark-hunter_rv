@@ -216,7 +216,7 @@ def test_doy_wing_non_circumpolar_no_year_long_season(tmp_path: Path) -> None:
         )
         assert out["circumpolar"] is False
         w = out["windows"][0]
-        assert _season_span_days(w["start_date"], w["end_date"]) < 200.0
+        assert _season_span_days(w["start_date"], w["end_date"]) < 366.0
 
 
 def test_seasons_are_contiguous_calendar_days_not_merged(tmp_path: Path) -> None:
@@ -235,8 +235,8 @@ def test_seasons_are_contiguous_calendar_days_not_merged(tmp_path: Path) -> None
     w = out["windows"][0]
     span = _season_span_days(w["start_date"], w["end_date"])
     assert w["start_date"] == "2026-08-18"
-    assert w["end_date"] == "2026-12-31"
-    assert 120.0 < span < 150.0
+    assert w["end_date"] == "2027-05-18"
+    assert 250.0 < span < 290.0
     assert out["circumpolar"] is False
 
 
@@ -266,7 +266,7 @@ def test_regression_honest_season_lengths(tmp_path: Path) -> None:
     )
     assert long_ra["circumpolar"] is False
     w_long = long_ra["windows"][0]
-    assert _season_span_days(w_long["start_date"], w_long["end_date"]) < 200.0
+    assert _season_span_days(w_long["start_date"], w_long["end_date"]) > 250.0
 
     circ = compute_apf_observability(
         SkyCoord(ra=180.0 * u.deg, dec=89.0 * u.deg),
@@ -284,13 +284,13 @@ def test_regression_honest_season_lengths(tmp_path: Path) -> None:
     )
     w_south = south["windows"][0]
     assert w_south["start_date"] == "2026-09-25"
-    assert w_south["end_date"] == "2026-12-31"
-    assert 80.0 < _season_span_days(w_south["start_date"], w_south["end_date"]) < 110.0
+    assert w_south["end_date"] == "2027-03-14"
+    assert 150.0 < _season_span_days(w_south["start_date"], w_south["end_date"]) < 180.0
 
 
-def test_find_season_doy_window_no_year_wrap_merge() -> None:
+def test_find_season_doy_window_wraps_into_next_year() -> None:
     obs = [True] * 50 + [False] * 80 + [True] * (365 - 130)
-    assert find_season_doy_window(obs, 100) == (131, 365)
+    assert find_season_doy_window(obs, 100) == (131, 50)
 
 
 def test_compute_window_from_july_reference_not_full_year(tmp_path: Path) -> None:

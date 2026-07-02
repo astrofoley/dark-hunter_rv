@@ -220,7 +220,9 @@ def find_season_doy_window(
     if start_idx is None:
         return None
     end_idx = start_idx
-    for j in range(start_idx + 1, n):
+    # Walk forward through Dec 31 and continue from Jan 1 if visibility remains contiguous.
+    for step in range(1, n):
+        j = (start_idx + step) % n
         if not observable_doy[j]:
             break
         end_idx = j
