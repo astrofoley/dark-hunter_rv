@@ -3,7 +3,7 @@
 #
 # - Deploys website/rv → WEB_ROOT (script.js builds plot cells by header name)
 # - Normalizes tables/data.csv column order and clears stray <img> in mass columns
-# - Fills DAYS SINCE LAST APF from output summaries (if present)
+# - Does not touch repo-root bias_statistics.txt (mask debias table is manual-only).
 # - Fills M2 / M2 sin i / M2 at i / NEXT RV EVENT from existing rv_fit_reports JSON (if present)
 #
 # Run this first, then full_website_refresh.sh when you are ready for a long refit pass.
@@ -44,6 +44,18 @@ fi
 echo "=== Deploy script.js / style.css / index.html ==="
 export WEB_ROOT
 bash scripts/setup_website.sh
+
+echo "=== Sample stars (ATF22 / E24): summaries + table rows (no bias rebuild) ==="
+"$PY" scripts/ensure_sample_stars_website.py \
+  --data-csv "$WEB_ROOT/tables/data.csv" \
+  --output-dir "$OUT" \
+  --plots-root "$OUT" \
+  --reports-dir "$REPORTS_DIR" \
+  --web-root "$WEB_ROOT" \
+  --with-plots
+
+echo "=== Patch Gaia G/BP/RP photometry in sample summaries ==="
+"$PY" scripts/patch_summary_gaia_photometry.py --output-dir "$OUT"
 
 if [[ ! -f "$REPO/scripts/update_website_table_columns.py" ]]; then
   echo "[ERROR] scripts/update_website_table_columns.py missing — git pull (merge PR #22+) first." >&2

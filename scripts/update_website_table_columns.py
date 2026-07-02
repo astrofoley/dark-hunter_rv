@@ -19,18 +19,22 @@ from fit_apf_rv_keplerian import (
     website_table_m2_at_i_pe_fixed_from_report,
     website_table_masses_from_report,
 )
+from darkhunter_rv.gaia_utils import parse_gaia_metadata_from_star_summary
 from darkhunter_rv.website_table_csv import (
     INCLINATION_COLUMN,
     M2SINI_ERR_COLUMN,
     M2_AT_I_COLUMN,
     M2_AT_I_PE_COLUMN,
     M2SINI_COLUMN,
+    G_MAG_COLUMN,
     N_OBS_COLUMN,
     days_since_last_apf_from_summary,
     format_next_rv_event_cell,
     format_optional_error_cell,
+    format_optional_g_mag_cell,
     format_optional_inclination_cell,
     format_optional_mass_cell,
+    gaia_g_mag_from_metadata,
     gaia_id_from_row,
     n_apf_obs_from_summary,
     next_rv_event_from_fit_report,
@@ -75,6 +79,7 @@ def update_table_columns(
     m2over_i = hdr.index(M2_AT_I_COLUMN)
     m2_pe_i = hdr.index(M2_AT_I_PE_COLUMN)
     incl_i = hdr.index(INCLINATION_COLUMN)
+    g_mag_i = hdr.index(G_MAG_COLUMN) if G_MAG_COLUMN in hdr else -1
     n_obs_i = hdr.index(N_OBS_COLUMN)
     apf_days_i = hdr.index("DAYS SINCE LAST APF")
     next_rv_i = hdr.index("NEXT RV EVENT (DATE)")
@@ -108,6 +113,7 @@ def update_table_columns(
     n_m2_at_i_eq_sin = 0
     n_m2_pe = 0
     n_incl = 0
+    n_g_mag = 0
     n_next = 0
     target = (gaia_id or "").strip()
     for r in data_rows:
@@ -134,6 +140,14 @@ def update_table_columns(
                     r.append("")
                 r[apf_days_i] = f"{age:.2f}"
                 n_apf_days += 1
+            if g_mag_i >= 0:
+                meta = parse_gaia_metadata_from_star_summary(summ) or {}
+                g_mag = gaia_g_mag_from_metadata(meta)
+                if g_mag is not None:
+                    while len(r) <= g_mag_i:
+                        r.append("")
+                    r[g_mag_i] = format_optional_g_mag_cell(g_mag)
+                    n_g_mag += 1
 
         rep = lookup_fit_report_by_gaia_id(reports, sid)
         if rep is None:
@@ -221,6 +235,7 @@ def update_table_columns(
         "m2_at_i_equals_m2sin_i": n_m2_at_i_eq_sin,
         "m2_at_i_pe_filled": n_m2_pe,
         "inclination_filled": n_incl,
+        "g_mag_filled": n_g_mag,
         "next_rv_filled": n_next,
         "reports_loaded": len(reports),
         "cache_enriched_from_summaries": n_cache_summ,
@@ -273,7 +288,7 @@ def main() -> int:
         f"updated {args.data_csv}: {stats['data_rows']} rows, {stats['columns']} columns, "
         f"cleared {stats['stray_img_cleared']} stray <img>, "
         f"n_obs={stats['n_obs_filled']}, apf_days={stats['apf_days_filled']}, m2={stats['m2_filled']}, "
-        f"incl={stats['inclination_filled']}, "
+        f"incl={stats['inclination_filled']}, g_mag={stats['g_mag_filled']}, "
         f"m2sin_i={stats['m2sin_i_filled']}, m2sin_i_err={stats['m2sin_i_err_filled']}, "
         f"m2_at_i={stats['m2_at_i_filled']} "
         f"(m2_at_i=m2sin_i for {stats['m2_at_i_equals_m2sin_i']}, often i≈90°), "

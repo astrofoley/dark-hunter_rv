@@ -27,6 +27,30 @@ echo "web_base=$WEB_BASE"
 echo "web_root=$WEB_ROOT (site document root)"
 echo "source=$SRC"
 
+gen_sample_tags_js() {
+  local src_json="$SRC/tables/sample_tags.json"
+  local out_js="$WEB_ROOT/sample_tags_data.js"
+  if [[ ! -f "$src_json" ]]; then
+    echo "[WARN] missing $src_json — sample filter counts may stay at 0" >&2
+    return 0
+  fi
+  run_cmd "$PY" - "$src_json" "$out_js" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+src, dst = Path(sys.argv[1]), Path(sys.argv[2])
+data = json.loads(src.read_text(encoding="utf-8"))
+dst.write_text("window.__SAMPLE_TAG_DATA__ = " + json.dumps(data, indent=2) + ";\n", encoding="utf-8")
+print(f"wrote {dst}")
+PY
+}
+
+PY="${PY:-python3}"
+if [[ -x /home/marley/anaconda2/envs/gaia-env/bin/python ]]; then
+  PY=/home/marley/anaconda2/envs/gaia-env/bin/python
+fi
+
 run_cmd() {
   if [[ "${DRY_RUN:-0}" == "1" ]]; then
     echo "[DRY_RUN] $*"
@@ -42,6 +66,12 @@ run_cmd rsync -a \
   --exclude 'tables/' \
   --exclude 'stars/' \
   "$SRC/" "$WEB_ROOT/"
+
+gen_sample_tags_js
+
+if [[ -f "$SRC/tables/sample_tags.json" ]]; then
+  run_cmd cp "$SRC/tables/sample_tags.json" "$WEB_ROOT/tables/"
+fi
 
 if [[ ! -f "$WEB_ROOT/tables/data.csv" ]]; then
   cat <<EOF

@@ -15,7 +15,7 @@ import numpy as np
 from astropy.time import Time
 
 from darkhunter_rv.apf_observability import _target_coord_from_summary, normalize_observability_window
-from darkhunter_rv.rv_keplerian_plots import our_telescope_points, plot_rv_data_only
+from darkhunter_rv.rv_keplerian_plots import plot_rv_data_only, points_for_rv_data_plot
 from darkhunter_rv.summary_paths import discover_summary_files, discover_summary_path, parse_object_id_from_summary
 from darkhunter_rv.website_plot_sync import maybe_stage_gaia_plots, resolve_web_root
 from fit_apf_rv_keplerian import parse_summary, resolve_observability_window
@@ -86,7 +86,11 @@ def build_plot(
             f"[WARN] {sid or summary_path.name}: no [GAIA METADATA] RA/Dec; APF window may be missing",
             flush=True,
         )
-    points = our_telescope_points(parse_summary(summary_path))
+    all_points = parse_summary(summary_path)
+    points, _literature_only = points_for_rv_data_plot(all_points)
+    if not points:
+        print(f"[SKIP] {sid or summary_path.name}: no RV epochs in summary", flush=True)
+        return False
     report = minimal_report(
         points,
         summary_path=summary_path,
@@ -96,7 +100,7 @@ def build_plot(
     )
     if report.get("observability_window") is None:
         print(f"[WARN] {sid or summary_path.name}: no APF observability window (check Lick twilight cache)", flush=True)
-    plot_rv_data_only(summary_path, points, report, out_png)
+    plot_rv_data_only(summary_path, all_points, report, out_png)
     return True
 
 

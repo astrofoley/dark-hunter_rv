@@ -20,3 +20,13 @@ def test_normalize_adds_inclination_column() -> None:
     rows = [["id", "1", "0.2", "0.3"]]
     normalize_data_csv(hdr, rows)
     assert "INCLINATION (deg)" in hdr
+
+
+def test_normalize_inserts_g_mag_after_dec() -> None:
+    from darkhunter_rv.website_table_csv import G_MAG_COLUMN
+
+    hdr = ["GAIA NAME", "RA (deg)", "DEC (deg)", "PARALLAX (mas)"]
+    rows = [["Gaia DR3 1", "1.0", "2.0", "3.0"]]
+    normalize_data_csv(hdr, rows)
+    assert G_MAG_COLUMN in hdr
+    assert hdr.index(G_MAG_COLUMN) == hdr.index("DEC (deg)") + 1

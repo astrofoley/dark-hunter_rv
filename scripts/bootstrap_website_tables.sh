@@ -60,6 +60,7 @@ for col in (
     "M2sin i (Msun)",
     "(M2sin i)/(sin i) (Msun)",
     "INCLINATION (deg)",
+    "G (mag)",
     "GAIA DATA",
     "DAYS SINCE LAST APF",
     "NEXT RV EVENT (DATE)",

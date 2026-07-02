@@ -50,6 +50,32 @@ def our_telescope_points(points: Sequence["RVPoint"]) -> List["RVPoint"]:
     return [p for p in points if not p.is_literature]
 
 
+def points_for_rv_data_plot(points: Sequence["RVPoint"]) -> Tuple[List["RVPoint"], bool]:
+    """Our epochs when present; otherwise literature RVs (sample stars without APF data)."""
+    ours = our_telescope_points(points)
+    if ours:
+        return ours, False
+    lit = [p for p in points if p.is_literature]
+    return lit, True
+
+
+def _report_with_observability(report: dict, summary_path: Path) -> dict:
+    if report.get("observability_window") is not None:
+        return report
+    sid = _fitmod().parse_object_id_from_summary(summary_path)
+    if not sid:
+        return report
+    # fit_apf_rv_keplerian imports this module; lazy import avoids a cycle.
+    from fit_apf_rv_keplerian import resolve_observability_window
+
+    obs = resolve_observability_window(summary_path, sid, None, lick_cache_path=None)
+    if obs is None:
+        return report
+    out = dict(report)
+    out["observability_window"] = obs
+    return out
+
+
 def _time_window(
     t: np.ndarray,
     report: dict,
@@ -396,8 +422,9 @@ def plot_rv_data_only(
     *,
     title_prefix: str = "RV data",
 ) -> None:
-    """Our telescope epochs only; Today + APF window markers (zero epochs OK)."""
-    pts = our_telescope_points(points)
+    """Our telescope epochs when available; otherwise literature RVs."""
+    report = _report_with_observability(report, summary_path)
+    pts, literature_only = points_for_rv_data_plot(points)
     if len(pts) >= 1:
         t = np.array([p.mjd for p in pts], dtype=float)
         y = np.array([p.rv for p in pts], dtype=float)
@@ -410,7 +437,7 @@ def plot_rv_data_only(
     fig, ax = plt.subplots(figsize=(10.5, 4.9))
     if len(pts) >= 1:
         yerr = _fitmod().effective_yerr_for_points(pts, report)
-        _plot_points(ax, pts, include_literature=False, yerr=yerr)
+        _plot_points(ax, pts, include_literature=literature_only, yerr=yerr)
         y_lim = _y_limits_data_and_models(t, y, [])
     else:
         y_lim = (-10.0, 10.0)
@@ -419,17 +446,17 @@ def plot_rv_data_only(
     _mark_time_reference(ax, report, t_lo, t_hi, y_top_in, annotate=True)
 
     sid = _fitmod().parse_object_id_from_summary(summary_path) or summary_path.stem.replace("_summary", "")
-    ax.set_xlabel("MJD")
+    ax.set_xlabel("MJD", labelpad=8)
     ax.set_ylabel("RV (km/s)")
-    ax.set_title(f"{title_prefix}: Gaia DR3 {sid}")
+    ax.set_title(f"{title_prefix}: Gaia DR3 {sid}", pad=10)
     ax.set_xlim(t_lo, t_hi)
     _style_rv_axes(ax)
     if len(pts) >= 1:
         ax.legend(loc="best", fontsize=8.5)
 
     out_png.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
-    fig.savefig(out_png, dpi=180, bbox_inches="tight", pad_inches=0.06)
+    fig.subplots_adjust(bottom=0.16)
+    fig.savefig(out_png, dpi=180, bbox_inches="tight", pad_inches=0.08)
     plt.close(fig)
 
 
@@ -447,6 +474,7 @@ def plot_multi_fit(
     if len(points) < 2:
         raise ValueError("need at least 2 points")
 
+    report = _report_with_observability(report, summary_path)
     t = np.array([p.mjd for p in points], dtype=float)
     y = np.array([p.rv for p in points], dtype=float)
     yerr = _fitmod().effective_yerr_for_points(points, report)
@@ -461,18 +489,30 @@ def plot_multi_fit(
     y_lim = _y_limits_data_and_models(t, y, curves)
     ax.set_ylim(*y_lim)
     y_top_in = y_lim[1] - 0.02 * (y_lim[1] - y_lim[0])
-    _mark_time_reference(ax, report, t_lo, t_hi, y_top_in, annotate=False)
+    _mark_time_reference(ax, report, t_lo, t_hi, y_top_in, annotate=True)
 
     sid = _fitmod().parse_object_id_from_summary(summary_path) or summary_path.stem.replace("_summary", "")
-    ax.set_xlabel("MJD")
+    ax.set_xlabel("MJD", labelpad=8)
     ax.set_ylabel("RV (km/s)")
-    ax.set_title(f"Keplerian fits: Gaia DR3 {sid}")
+    ax.set_title(f"Keplerian fits: Gaia DR3 {sid}", pad=10)
     ax.set_xlim(t_lo, t_hi)
     _style_rv_axes(ax)
 
+    handles, labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(
+            handles,
+            labels,
+            loc="upper left",
+            bbox_to_anchor=(1.01, 1.0),
+            borderaxespad=0.0,
+            fontsize=8.5,
+            framealpha=0.95,
+        )
+
     out_png.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
-    fig.savefig(out_png, dpi=180, bbox_inches="tight", pad_inches=0.06)
+    fig.subplots_adjust(bottom=0.16, right=0.82)
+    fig.savefig(out_png, dpi=180, bbox_inches="tight", pad_inches=0.08)
     plt.close(fig)
 
 
@@ -506,6 +546,7 @@ def plot_fit_residuals(
     if len(points) < 2:
         raise ValueError("need at least 2 points")
 
+    report = _report_with_observability(report, summary_path)
     if m1_msun is None:
         used = report.get("used_m1_msun")
         if used is not None and np.isfinite(used):
@@ -535,12 +576,12 @@ def plot_fit_residuals(
         if key != "free":
             dense_map[key] = rv_model(params, t_dense, t_ref) - model_free_dense
 
-    fig = plt.figure(figsize=(10.8, 7.6))
+    fig = plt.figure(figsize=(10.8, 8.0))
     gs = fig.add_gridspec(
         3,
         1,
-        height_ratios=[2.25, 1.05, 0.55],
-        hspace=0.06,
+        height_ratios=[2.2, 1.05, 0.72],
+        hspace=0.14,
     )
     ax_top = fig.add_subplot(gs[0])
     ax_bot = fig.add_subplot(gs[1], sharex=ax_top)
@@ -583,7 +624,7 @@ def plot_fit_residuals(
     ax_bot.set_ylim(*r_ylim)
     ax_bot.set_ylabel("ΔRV (km/s)")
     ax_bot.set_xlim(t_lo, t_hi)
-    ax_bot.set_xlabel("MJD")
+    ax_bot.set_xlabel("MJD", labelpad=10)
     _style_rv_axes(ax_bot)
 
     handles, labels = ax_top.get_legend_handles_labels()
@@ -601,7 +642,7 @@ def plot_fit_residuals(
     param_lines = _variant_param_lines(fit_variants, m1_msun)
     ax_txt.text(
         0.01,
-        0.95,
+        0.98,
         "\n".join(param_lines),
         transform=ax_txt.transAxes,
         fontsize=8.5,
@@ -611,6 +652,6 @@ def plot_fit_residuals(
     )
 
     out_png.parent.mkdir(parents=True, exist_ok=True)
-    fig.subplots_adjust(right=0.82)
-    fig.savefig(out_png, dpi=180, bbox_inches="tight", pad_inches=0.08)
+    fig.subplots_adjust(right=0.82, bottom=0.10, top=0.96)
+    fig.savefig(out_png, dpi=180, bbox_inches="tight", pad_inches=0.10)
     plt.close(fig)

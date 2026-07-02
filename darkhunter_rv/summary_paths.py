@@ -19,7 +19,7 @@ def is_primary_epoch_spectrum_name(filename: str) -> bool:
 
 
 def parse_object_id_from_summary(path: Path) -> Optional[str]:
-    m = re.search(r"Gaia_DR3_(\d{18,19})", f"{path.parent.name}/{path.stem}")
+    m = re.search(r"Gaia_DR3_(\d+)", f"{path.parent.name}/{path.stem}")
     if m:
         return m.group(1)
     meta = parse_gaia_metadata_from_star_summary(path)
@@ -35,7 +35,10 @@ def parse_object_id_from_summary(path: Path) -> Optional[str]:
             m = re.search(r"=\s*([0-9]+)", line)
             if m:
                 return m.group(1)
-    m = re.match(r"([0-9]+)_summary$", path.stem)
+    m = re.match(r"Gaia_DR3_(\d+)_summary$", path.stem)
+    if m:
+        return m.group(1)
+    m = re.match(r"(\d+)_summary$", path.stem)
     return m.group(1) if m else None
 
 
@@ -116,7 +119,7 @@ def count_pipeline_rows(path: Path) -> int:
 
 
 def discover_summary_files(output_dir: Path) -> list[Path]:
-    """One summary per Gaia source_id; prefer flat output/Gaia_DR3_<id>_summary.txt over nested stubs."""
+    """One summary per Gaia source_id; prefer the file with the most pipeline epochs."""
     if not output_dir.is_dir():
         return []
     out_root = output_dir.resolve()
@@ -129,7 +132,9 @@ def discover_summary_files(output_dir: Path) -> list[Path]:
             mtime = path.stat().st_mtime
         except OSError:
             mtime = 0.0
-        return (flat, gaia_named, count_pipeline_rows(path), mtime)
+        n_valid = count_valid_pipeline_rv_epochs(path)
+        n_rows = count_pipeline_rows(path)
+        return (n_valid, n_rows, flat, gaia_named, mtime)
 
     for p in output_dir.rglob("*_summary.txt"):
         if not p.is_file():

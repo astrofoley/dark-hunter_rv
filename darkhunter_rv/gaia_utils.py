@@ -84,7 +84,7 @@ def query_gaia_data(source_id):
         return None
 
     cols_nss = "n.nss_solution_type, n.ra, n.dec, n.parallax, n.parallax_error, n.a_thiele_innes, n.a_thiele_innes_error, n.b_thiele_innes, n.b_thiele_innes_error, n.f_thiele_innes, n.f_thiele_innes_error, n.g_thiele_innes, n.g_thiele_innes_error, n.c_thiele_innes, n.c_thiele_innes_error, n.h_thiele_innes, n.h_thiele_innes_error, n.period, n.period_error, n.t_periastron, n.t_periastron_error, n.eccentricity, n.eccentricity_error, n.center_of_mass_velocity, n.center_of_mass_velocity_error, n.semi_amplitude_primary, n.semi_amplitude_primary_error, n.semi_amplitude_secondary, n.semi_amplitude_secondary_error, n.mass_ratio, n.mass_ratio_error, n.inclination, n.inclination_error, n.arg_periastron, n.arg_periastron_error"
-    cols_source = "s.ruwe, s.teff_gspphot, s.teff_gspphot_lower, s.teff_gspphot_upper, s.logg_gspphot, s.logg_gspphot_lower, s.logg_gspphot_upper, s.mh_gspphot, s.mh_gspphot_lower, s.mh_gspphot_upper, s.ra AS ra_source, s.dec AS dec_source, s.parallax AS plx_source, s.pmra, s.pmdec, s.radial_velocity, s.radial_velocity_error, s.source_id"
+    cols_source = "s.ruwe, s.teff_gspphot, s.teff_gspphot_lower, s.teff_gspphot_upper, s.logg_gspphot, s.logg_gspphot_lower, s.logg_gspphot_upper, s.mh_gspphot, s.mh_gspphot_lower, s.mh_gspphot_upper, s.phot_g_mean_mag, s.phot_bp_mean_mag, s.phot_rp_mean_mag, s.ra AS ra_source, s.dec AS dec_source, s.parallax AS plx_source, s.pmra, s.pmdec, s.radial_velocity, s.radial_velocity_error, s.source_id"
 
     q_main = f"""
     SELECT {cols_nss}, {cols_source}
@@ -269,6 +269,9 @@ def process_query_results(main_rows, unified_external_rows):
         "Source_ID": source_id_meta,
         "RA": get_val(base, "ra", get_val(base, "ra_source")),
         "Dec": get_val(base, "dec", get_val(base, "dec_source")),
+        "G": get_val(base, "phot_g_mean_mag"),
+        "BP": get_val(base, "phot_bp_mean_mag"),
+        "RP": get_val(base, "phot_rp_mean_mag"),
         "Parallax": get_val(base, "parallax", get_val(base, "plx_source")),
         "Parallax_Error": get_val(base, "parallax_error"),
         "PMRA": get_val(base, "pmra"),
@@ -462,7 +465,7 @@ def _metadata_value_ok(key: str, val) -> bool:
     if isinstance(val, (float, np.floating)):
         if key == "Teff" and not np.isfinite(val):
             return False
-        if key in ("RA", "Dec", "Parallax", "PMRA", "PMDec") and not np.isfinite(val):
+        if key in ("RA", "Dec", "Parallax", "PMRA", "PMDec", "G", "BP", "RP") and not np.isfinite(val):
             return False
         return True
     if isinstance(val, (int, np.integer)):
@@ -825,6 +828,20 @@ def load_gaia_data_from_star_summary(path, expected_source_id: int | None = None
         return None
     ext = parse_external_rvs_from_star_summary(path)
     return {"metadata": meta, "external_rvs": ext}
+
+
+def star_summary_metadata_needs_photometry(metadata: dict) -> bool:
+    meta = normalize_parsed_star_metadata(metadata or {})
+    for key in ("G", "BP", "RP"):
+        val = meta.get(key)
+        if val is None:
+            return True
+        try:
+            if not np.isfinite(float(val)):
+                return True
+        except (TypeError, ValueError):
+            return True
+    return False
 
 
 def resolve_gaia_data(source_id: int, summary_path, force_query: bool):

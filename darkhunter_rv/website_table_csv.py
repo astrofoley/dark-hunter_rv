@@ -22,6 +22,8 @@ NA_DISPLAY_COLUMNS = frozenset(
 )
 
 GAIA_DATA_COLUMN = "GAIA DATA"
+G_MAG_COLUMN = "G (mag)"
+DEC_COLUMN_CANDIDATES = ("DEC (deg)", "Dec (deg)")
 N_OBS_COLUMN = "N_obs"
 SCHEDULE_COLUMNS = ("DAYS SINCE LAST APF", "NEXT RV EVENT (DATE)")
 GAIA_SCHEDULE_COLUMNS = (N_OBS_COLUMN,) + SCHEDULE_COLUMNS
@@ -35,6 +37,7 @@ _INSERT_AFTER: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("DATA PRODUCTS", (GAIA_DATA_COLUMN,)),
     (GAIA_DATA_COLUMN, GAIA_SCHEDULE_COLUMNS),
 )
+_DEC_INSERT_COLUMNS = (G_MAG_COLUMN,)
 
 
 def mjd_to_yyyy_mm_dd(mjd: float) -> str:
@@ -52,6 +55,62 @@ def format_optional_mass_cell(value: Optional[float]) -> str:
     if value is None or not np.isfinite(value) or float(value) <= 0:
         return "N/A"
     return f"{float(value):.5f}"
+
+
+def format_optional_g_mag_cell(value: Optional[float]) -> str:
+    if value is None or not np.isfinite(value):
+        return ""
+    return f"{float(value):.3f}"
+
+
+def gaia_g_mag_from_metadata(metadata: dict) -> Optional[float]:
+    if not metadata:
+        return None
+    for key in ("G", "phot_g_mean_mag"):
+        raw = metadata.get(key)
+        if raw is None:
+            continue
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(val):
+            return float(val)
+    return None
+
+
+def build_table_row_from_metadata(hdr: List[str], gaia_id: str, metadata: dict) -> List[str]:
+    """Minimal website row for a Gaia source (sample stars without legacy table entries)."""
+    row = [""] * len(hdr)
+
+    def setcol(name: str, val: str) -> None:
+        if name in hdr:
+            row[hdr.index(name)] = val
+
+    setcol("GAIA NAME", f"Gaia DR3 {gaia_id}")
+    ra = metadata.get("RA")
+    dec = metadata.get("Dec")
+    if ra is not None and np.isfinite(float(ra)):
+        setcol("RA (deg)", f"{float(ra):.8f}")
+    if dec is not None and np.isfinite(float(dec)):
+        setcol("DEC (deg)", f"{float(dec):.8f}")
+    g = gaia_g_mag_from_metadata(metadata)
+    if g is not None:
+        setcol(G_MAG_COLUMN, format_optional_g_mag_cell(g))
+    for name in (
+        "PARALLAX (mas)",
+        "PMRA (mas/yr)",
+        "PMDEC (mas/yr)",
+        "PERIOD (days)",
+        "ECCENTRICITY",
+        INCLINATION_COLUMN,
+        "M1 (Msun)",
+        "M2 (Msun)",
+    ) + MASS_COLUMNS:
+        if name in hdr:
+            setcol(name, "N/A")
+    setcol(N_OBS_COLUMN, "0")
+    return row
 
 
 def format_optional_inclination_cell(value: Optional[float]) -> str:
@@ -160,12 +219,18 @@ def build_canonical_header(hdr: List[str]) -> List[str]:
     inserted_incl = False
     inserted_mass = False
     inserted_sched = False
+    inserted_g = False
     for h in base:
         if h in mass_and_incl or h in sched_block or h == GAIA_DATA_COLUMN:
             continue
         if h == LEGACY_NEXT_RV_MJD:
             continue
+        if h == G_MAG_COLUMN:
+            continue
         out.append(h)
+        if not inserted_g and h in DEC_COLUMN_CANDIDATES and G_MAG_COLUMN in base:
+            out.append(G_MAG_COLUMN)
+            inserted_g = True
         if h == "ECCENTRICITY" and not inserted_incl:
             if INCLINATION_COLUMN in base:
                 out.append(INCLINATION_COLUMN)
@@ -183,6 +248,15 @@ def build_canonical_header(hdr: List[str]) -> List[str]:
                     if c in base:
                         out.append(c)
                 inserted_sched = True
+
+    if not inserted_g and G_MAG_COLUMN in base and G_MAG_COLUMN not in out:
+        for anchor in DEC_COLUMN_CANDIDATES:
+            if anchor in out:
+                out.insert(out.index(anchor) + 1, G_MAG_COLUMN)
+                inserted_g = True
+                break
+        if not inserted_g:
+            out.append(G_MAG_COLUMN)
 
     if not inserted_incl and INCLINATION_COLUMN in base and INCLINATION_COLUMN not in out:
         if "ECCENTRICITY" in out:
@@ -211,7 +285,9 @@ def normalize_data_csv(hdr: List[str], data_rows: List[List[str]]) -> Tuple[List
     """
     _ensure_columns_present(
         hdr,
-        MASS_COLUMNS + (INCLINATION_COLUMN, GAIA_DATA_COLUMN) + GAIA_SCHEDULE_COLUMNS,
+        MASS_COLUMNS
+        + (INCLINATION_COLUMN, G_MAG_COLUMN, GAIA_DATA_COLUMN)
+        + GAIA_SCHEDULE_COLUMNS,
     )
     align_rows_to_header(hdr, data_rows)
 
@@ -247,11 +323,11 @@ def normalize_data_csv(hdr: List[str], data_rows: List[List[str]]) -> Tuple[List
 
 
 def _parse_pipeline_apf_mjds(summary_path: Path) -> List[float]:
+    from darkhunter_rv.rv_point_filters import mjd_is_valid
+
     text = summary_path.read_text(encoding="utf-8", errors="replace")
     if "[PIPELINE RESULTS]" not in text:
         return []
-    from darkhunter_rv.rv_point_filters import mjd_is_valid
-
     block = text.split("[PIPELINE RESULTS]", 1)[-1]
     mjds: List[float] = []
     for raw in block.splitlines():
@@ -272,8 +348,10 @@ def _parse_pipeline_apf_mjds(summary_path: Path) -> List[float]:
 
 
 def n_apf_obs_from_summary(summary_path: Path) -> int:
-    """Count APF pipeline epochs in a star summary."""
-    return len(_parse_pipeline_apf_mjds(summary_path))
+    """Count valid APF pipeline epochs in a star summary."""
+    from darkhunter_rv.summary_paths import count_valid_pipeline_rv_epochs
+
+    return count_valid_pipeline_rv_epochs(summary_path)
 
 
 def days_since_last_apf_from_summary(summary_path: Path, *, now_mjd: Optional[float] = None) -> Optional[float]:

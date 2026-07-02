@@ -51,6 +51,7 @@ const headerDisplayMap = {
     "GAIA NAME": "Gaia DR3",
     "RA (deg)": "RA (deg)",
     "DEC (deg)": "Dec (deg)",
+    "G (mag)": "G (mag)",
     "PARALLAX (mas)": "Parallax (mas)",
     "PMRA (mas/yr)": "PMRA (mas/yr)",
     "PMDEC (mas/yr)": "PMDec (mas/yr)",
@@ -439,7 +440,7 @@ function colIndex(headerName) {
     return Object.prototype.hasOwnProperty.call(colByHeader, headerName) ? colByHeader[headerName] : -1;
 }
 
-const NUMERIC_TABLE_HEADERS = new Set(["DAYS SINCE LAST APF", "INCLINATION (deg)", "N_obs"]);
+const NUMERIC_TABLE_HEADERS = new Set(["DAYS SINCE LAST APF", "INCLINATION (deg)", "N_obs", "G (mag)"]);
 const NA_DISPLAY_HEADERS = new Set([
     "INCLINATION (deg)",
     "(M2sin i)/(sin i) (Msun)",
@@ -678,7 +679,31 @@ function cleanKeckValue(v) {
     return s;
 }
 
+function gaiaIdForRow(row) {
+    if (row && row.dataset && row.dataset.gaiaId) {
+        return row.dataset.gaiaId;
+    }
+    const cells = row ? row.getElementsByTagName("td") : [];
+    return cells.length ? normalizeGaiaId(cells[0].textContent) : "";
+}
+
+function applySampleTagData(data) {
+    if (!data || typeof data !== "object") {
+        return;
+    }
+    for (const key of Object.keys(SAMPLE_TAG_SETS)) {
+        const ids = data[key];
+        if (!Array.isArray(ids)) {
+            continue;
+        }
+        SAMPLE_TAG_SETS[key] = new Set(ids.map(id => String(id).trim()).filter(Boolean));
+    }
+}
+
 function loadOptionalSampleTags() {
+    if (window.__SAMPLE_TAG_DATA__) {
+        applySampleTagData(window.__SAMPLE_TAG_DATA__);
+    }
     return fetch("tables/sample_tags.json", { cache: "no-store" })
         .then(response => {
             if (!response.ok) {
@@ -687,15 +712,8 @@ function loadOptionalSampleTags() {
             return response.json();
         })
         .then(data => {
-            if (!data || typeof data !== "object") {
-                return;
-            }
-            for (const key of Object.keys(SAMPLE_TAG_SETS)) {
-                const ids = data[key];
-                if (!Array.isArray(ids)) {
-                    continue;
-                }
-                SAMPLE_TAG_SETS[key] = new Set(ids.map(id => String(id).trim()).filter(Boolean));
+            if (data && typeof data === "object") {
+                applySampleTagData(data);
             }
         })
         .catch(() => {});
@@ -1000,6 +1018,7 @@ function updateToggleCounts(baseRows) {
     const recentApfWeekCount = document.getElementById("count-recent-apf-week");
     const recentKeckWeekCount = document.getElementById("count-recent-keck-week");
     const yesNoCounts = YES_NO_PARAMS.map(param => document.getElementById(param.countId));
+    const sampleCounts = SAMPLE_FILTERS.map(cfg => document.getElementById(cfg.countId));
     let rv = 0;
     let flux = 0;
     let source = 0;
@@ -1010,6 +1029,8 @@ function updateToggleCounts(baseRows) {
     let recentApfWeek = 0;
     let recentKeckWeek = 0;
     const yesNoTotals = YES_NO_PARAMS.map(() => ({ Y: 0, N: 0 }));
+    const sampleTotals = SAMPLE_FILTERS.map(() => 0);
+    const catalogRows = getDataRows();
     for (let i = 0; i < baseRows.length; i++) {
         if (rowHasPlotInColumn(baseRows[i], "RV PLOT")) rv += 1;
         if (rowHasPlotInColumn(baseRows[i], "FLUX PLOT")) flux += 1;
@@ -1025,6 +1046,15 @@ function updateToggleCounts(baseRows) {
             yesNoTotals[j][v] += 1;
         }
     }
+    for (let i = 0; i < catalogRows.length; i++) {
+        const rowGaiaId = gaiaIdForRow(catalogRows[i]);
+        for (let j = 0; j < SAMPLE_FILTERS.length; j++) {
+            const tagSet = SAMPLE_TAG_SETS[SAMPLE_FILTERS[j].key];
+            if (tagSet && rowGaiaId && tagSet.has(rowGaiaId)) {
+                sampleTotals[j] += 1;
+            }
+        }
+    }
     if (rvCount) rvCount.textContent = `(${rv})`;
     if (fluxCount) fluxCount.textContent = `(${flux})`;
     if (sourceCount) sourceCount.textContent = `(${source})`;
@@ -1037,6 +1067,11 @@ function updateToggleCounts(baseRows) {
     for (let i = 0; i < yesNoCounts.length; i++) {
         if (yesNoCounts[i]) {
             yesNoCounts[i].textContent = `(Y:${yesNoTotals[i].Y} N:${yesNoTotals[i].N})`;
+        }
+    }
+    for (let i = 0; i < sampleCounts.length; i++) {
+        if (sampleCounts[i]) {
+            sampleCounts[i].textContent = `(${sampleTotals[i]})`;
         }
     }
 }
