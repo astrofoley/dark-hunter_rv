@@ -152,6 +152,31 @@ def load_cache(path: Optional[Path] = None) -> Dict[str, Any]:
         return {"nights": []}
 
 
+def cache_mjd_bounds(path: Optional[Path] = None) -> Tuple[Optional[float], Optional[float]]:
+    """Return (min evening MJD, max morning MJD) covered by a twilight cache, if any."""
+    nights = load_cache(path).get("nights") or []
+    eve_vals: List[float] = []
+    morn_vals: List[float] = []
+    for row in nights:
+        if not isinstance(row, dict):
+            continue
+        try:
+            eve_vals.append(float(row["eve_mjd"]))
+            morn_vals.append(float(row["morn_mjd"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not eve_vals or not morn_vals:
+        return None, None
+    return min(eve_vals), max(morn_vals)
+
+
+def years_covering_mjd_range(start_mjd: float, end_mjd: float) -> List[int]:
+    """Calendar years needed to cover an MJD interval (Pacific evening dates)."""
+    y0 = Time(float(start_mjd), format="mjd").to_datetime(timezone=LICK_TZ).year
+    y1 = Time(float(end_mjd), format="mjd").to_datetime(timezone=LICK_TZ).year
+    return list(range(int(y0), int(y1) + 1))
+
+
 def nights_in_mjd_range(
     start_mjd: float,
     end_mjd: float,

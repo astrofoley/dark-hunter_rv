@@ -16,24 +16,55 @@ from typing import List, Optional
 
 from astropy.time import Time
 
-from darkhunter_rv.apf_observability import observability_for_summary, normalize_observability_window
-from darkhunter_rv.lick_twilight_cache import default_cache_path as default_lick_cache_path, load_cache
+from darkhunter_rv.apf_observability import (
+    SCAN_HORIZON_DAYS,
+    observability_for_summary,
+    normalize_observability_window,
+    reference_now,
+)
+from darkhunter_rv.lick_twilight_cache import (
+    cache_mjd_bounds,
+    default_cache_path as default_lick_cache_path,
+    load_cache,
+    years_covering_mjd_range,
+)
 from darkhunter_rv.website_table_csv import gaia_id_from_row
 from darkhunter_rv.summary_paths import discover_summary_path
 
 
-def _ensure_lick_cache(cache_path: Path, years: Optional[str]) -> None:
-    if cache_path.is_file() and load_cache(cache_path).get("nights"):
-        return
+def _ensure_lick_cache(
+    cache_path: Path,
+    years: Optional[str],
+    *,
+    scan_horizon_days: int = SCAN_HORIZON_DAYS,
+) -> None:
     from darkhunter_rv.lick_twilight_cache import build_cache_years
 
+    now_mjd, _, today_start_mjd = reference_now()
+    need_end_mjd = now_mjd + float(scan_horizon_days)
     if years:
         year_list = [int(y.strip()) for y in years.split(",") if y.strip()]
     else:
-        y = int(Time.now().datetime.year)
-        year_list = [y - 1, y, y + 1]
-    print(f"Fetching Lick twilight tables for {year_list} …", flush=True)
-    build_cache_years(year_list, cache_path=cache_path)
+        year_list = years_covering_mjd_range(today_start_mjd - 30.0, need_end_mjd + 30.0)
+
+    cached = load_cache(cache_path) if cache_path.is_file() else {}
+    cached_years = {int(y) for y in (cached.get("years") or []) if str(y).isdigit()}
+    _, cache_end_mjd = cache_mjd_bounds(cache_path)
+    if (
+        cached.get("nights")
+        and cache_end_mjd is not None
+        and cache_end_mjd >= need_end_mjd + 1.0
+        and cached_years.issuperset(year_list)
+    ):
+        return
+
+    all_years = sorted(set(year_list) | cached_years)
+    print(
+        f"Fetching Lick twilight tables for {all_years} "
+        f"(need coverage through MJD {need_end_mjd:.0f}) …",
+        flush=True,
+    )
+    build_cache_years(all_years, cache_path=cache_path)
 
 
 def main() -> int:
@@ -125,18 +156,24 @@ def main() -> int:
         win = entry.get("next_window_start_date", "")
         end = entry.get("next_window_end_date", "")
         circ = entry.get("circumpolar", False)
-        if win and end and win == end:
+        if circ:
+            print(f"[{idx}/{n_ids}] {sid}: circumpolar (year-round at APF limits)", flush=True)
+        elif not win and not end:
+            print(f"[{idx}/{n_ids}] {sid}: no observable window in scan horizon", flush=True)
+        elif win and end and win == end:
             print(f"[{idx}/{n_ids}] {sid}: WARNING same-day window {win}", flush=True)
-        elif win and end and not circ:
-            try:
-                span = float(Time(end, format="iso", scale="utc").mjd) - float(
-                    Time(win, format="iso", scale="utc").mjd
-                )
-                if span > 250.0:
-                    print(f"[{idx}/{n_ids}] {sid}: WARNING long window {win} to {end}", flush=True)
-            except Exception:
-                pass
-        print(f"[{idx}/{n_ids}] {sid}: {win} to {end}", flush=True)
+            print(f"[{idx}/{n_ids}] {sid}: {win} to {end}", flush=True)
+        else:
+            if win and end and not circ:
+                try:
+                    span = float(Time(end, format="iso", scale="utc").mjd) - float(
+                        Time(win, format="iso", scale="utc").mjd
+                    )
+                    if span > 250.0:
+                        print(f"[{idx}/{n_ids}] {sid}: WARNING long window {win} to {end}", flush=True)
+                except Exception:
+                    pass
+            print(f"[{idx}/{n_ids}] {sid}: {win} to {end}", flush=True)
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(json.dumps(cache, indent=2, sort_keys=True))

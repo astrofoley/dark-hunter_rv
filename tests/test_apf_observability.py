@@ -237,6 +237,19 @@ def test_trim_run_calendar_span_caps_scan_horizon_merge() -> None:
     assert trimmed[0].evening_twilight_mjd >= today_start - 0.5
 
 
+def test_clamp_season_dates_caps_year_long_output() -> None:
+    from darkhunter_rv.apf_observability import _clamp_season_dates
+
+    start_date, end_date, start_mjd, end_mjd = _clamp_season_dates(
+        "2026-07-01",
+        "2027-07-02",
+        61222.0,
+        61588.0,
+    )
+    assert end_date < "2027-07-02"
+    assert _season_span_days(start_date, end_date) <= 250.0
+
+
 def test_compute_window_from_july_reference_not_full_year(tmp_path: Path) -> None:
     from astropy.time import Time
 

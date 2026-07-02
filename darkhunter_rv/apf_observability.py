@@ -399,6 +399,25 @@ def _trim_run_calendar_span(
     return chosen[:1]
 
 
+def _clamp_season_dates(
+    start_date: str,
+    end_date: str,
+    start_mjd: float,
+    end_mjd: float,
+    *,
+    max_calendar_days: float = MAX_SEASON_CALENDAR_DAYS,
+) -> Tuple[str, str, float, float]:
+    """Hard cap on reported season length (safety net after run trimming)."""
+    if _season_calendar_span_days(start_date, end_date) <= max_calendar_days:
+        return start_date, end_date, start_mjd, end_mjd
+    cap_end_mjd = float(Time(start_date, format="iso", scale="utc").mjd) + max_calendar_days
+    end_mjd = min(float(end_mjd), cap_end_mjd)
+    end_date = _lick_date_from_mjd(end_mjd)
+    if end_date < start_date:
+        end_date = start_date
+    return start_date, end_date, start_mjd, end_mjd
+
+
 def _find_best_window(
     nights: List[NightRecord],
     today_mjd: float,
@@ -576,6 +595,12 @@ def compute_apf_observability(
     if start_mjd_win < today_start_mjd - 0.01 and end_mjd_win >= now_mjd:
         start_mjd_win = today_start_mjd
         start_date = today_iso
+    start_date, end_date, start_mjd_win, end_mjd_win = _clamp_season_dates(
+        start_date,
+        end_date,
+        start_mjd_win,
+        end_mjd_win,
+    )
     win = ObsWindow(start_mjd_win, end_mjd_win, start_date, end_date)
     return normalize_observability_window(
         {
