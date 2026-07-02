@@ -209,3 +209,110 @@ def interpolate_lst_deg(row: Dict[str, Any], mjd: float) -> float:
     frac = (float(mjd) - eve) / (morn - eve)
     delta = ((lst1 - lst0 + 180.0) % 360.0) - 180.0
     return (lst0 + frac * delta) % 360.0
+
+
+TWILIGHT_WING_OFFSET_MINUTES = 30
+DOY_REFERENCE_YEAR = 2026
+_WING_OFFSET_DAYS = TWILIGHT_WING_OFFSET_MINUTES / (24.0 * 60.0)
+
+
+def default_doy_anchor_path(repo_root: Optional[Path] = None) -> Path:
+    root = repo_root or Path(__file__).resolve().parents[1]
+    return root / "rv_fit_reports" / "lick_doy_anchors.json"
+
+
+def _doy_from_evening_date(evening_date: str) -> int:
+    return datetime.strptime(evening_date, "%Y-%m-%d").timetuple().tm_yday
+
+
+def _reference_year_nights(
+    nights: List[Dict[str, Any]],
+    reference_year: int,
+) -> List[Dict[str, Any]]:
+    ref = [n for n in nights if str(n.get("evening_date", "")).startswith(f"{reference_year:04d}-")]
+    if len(ref) >= 300:
+        return ref
+    by_year: Dict[int, List[Dict[str, Any]]] = {}
+    for row in nights:
+        if not isinstance(row, dict) or not row.get("evening_date"):
+            continue
+        try:
+            year = int(str(row["evening_date"])[:4])
+        except ValueError:
+            continue
+        by_year.setdefault(year, []).append(row)
+    if not by_year:
+        return []
+    best_year = max(by_year, key=lambda y: len(by_year[y]))
+    return by_year[best_year]
+
+
+def build_doy_anchor_table(
+    reference_year: int = DOY_REFERENCE_YEAR,
+    *,
+    cache_path: Optional[Path] = None,
+    doy_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Year-independent LST anchors at evening+30min and morning−30min per DOY."""
+    cache = load_cache(cache_path)
+    nights = _reference_year_nights(cache.get("nights") or [], reference_year)
+    if not nights:
+        raise RuntimeError(
+            "No twilight nights in cache; run scripts/build_lick_twilight_cache.py first."
+        )
+    used_year = int(str(nights[0]["evening_date"])[:4])
+    by_doy: Dict[int, Dict[str, Any]] = {}
+    for row in nights:
+        doy = _doy_from_evening_date(str(row["evening_date"]))
+        if doy in by_doy:
+            continue
+        eve_mjd = float(row["eve_mjd"])
+        morn_mjd = float(row["morn_mjd"])
+        month = int(str(row["evening_date"])[5:7])
+        day = int(str(row["evening_date"])[8:10])
+        by_doy[doy] = {
+            "doy": doy,
+            "month": month,
+            "day": day,
+            "lst_eve30_deg": interpolate_lst_deg(row, eve_mjd + _WING_OFFSET_DAYS),
+            "lst_morn30_deg": interpolate_lst_deg(row, morn_mjd - _WING_OFFSET_DAYS),
+        }
+    rows = [by_doy[d] for d in sorted(by_doy)]
+    payload = {
+        "source": "lick_twilight_cache",
+        "reference_year": used_year,
+        "twilight_wing_offset_minutes": TWILIGHT_WING_OFFSET_MINUTES,
+        "timezone": "America/Los_Angeles",
+        "rows": rows,
+    }
+    path = doy_path or default_doy_anchor_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2))
+    return payload
+
+
+def load_doy_anchors(path: Optional[Path] = None) -> Dict[str, Any]:
+    p = path or default_doy_anchor_path()
+    if not p.is_file():
+        return {"rows": []}
+    try:
+        data = json.loads(p.read_text())
+        return data if isinstance(data, dict) else {"rows": []}
+    except Exception:
+        return {"rows": []}
+
+
+def ensure_doy_anchors(
+    *,
+    cache_path: Optional[Path] = None,
+    doy_path: Optional[Path] = None,
+    reference_year: int = DOY_REFERENCE_YEAR,
+) -> Dict[str, Any]:
+    """Load DOY anchors; build from twilight cache when missing or incomplete."""
+    lick = cache_path or default_cache_path()
+    doy = doy_path or lick.parent / "lick_doy_anchors.json"
+    data = load_doy_anchors(doy)
+    rows = data.get("rows") or []
+    if len(rows) >= 300:
+        return data
+    return build_doy_anchor_table(reference_year, cache_path=lick, doy_path=doy)

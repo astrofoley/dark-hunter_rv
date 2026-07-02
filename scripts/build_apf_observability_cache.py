@@ -10,11 +10,14 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import sys
 import warnings
 from pathlib import Path
 from typing import List, Optional
 
-from astropy.time import Time
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from darkhunter_rv.apf_observability import (
     SCAN_HORIZON_DAYS,
@@ -25,6 +28,7 @@ from darkhunter_rv.apf_observability import (
 from darkhunter_rv.lick_twilight_cache import (
     cache_mjd_bounds,
     default_cache_path as default_lick_cache_path,
+    ensure_doy_anchors,
     load_cache,
     years_covering_mjd_range,
 )
@@ -61,10 +65,11 @@ def _ensure_lick_cache(
     all_years = sorted(set(year_list) | cached_years)
     print(
         f"Fetching Lick twilight tables for {all_years} "
-        f"(need coverage through MJD {need_end_mjd:.0f}) …",
+        f"(need coverage through MJD {need_end_mjd:.0f}) ...",
         flush=True,
     )
     build_cache_years(all_years, cache_path=cache_path)
+    ensure_doy_anchors(cache_path=cache_path)
 
 
 def main() -> int:
@@ -110,6 +115,7 @@ def main() -> int:
     data_csv = Path(args.data_csv)
 
     _ensure_lick_cache(lick_cache, args.lick_years)
+    ensure_doy_anchors(cache_path=lick_cache)
 
     gaia_ids: List[str] = []
     if args.gaia_id:
@@ -164,19 +170,6 @@ def main() -> int:
             print(f"[{idx}/{n_ids}] {sid}: WARNING same-day window {win}", flush=True)
             print(f"[{idx}/{n_ids}] {sid}: {win} to {end}", flush=True)
         else:
-            if win and end and not circ:
-                try:
-                    span = float(Time(end, format="iso", scale="utc").mjd) - float(
-                        Time(win, format="iso", scale="utc").mjd
-                    )
-                    if span >= float(SCAN_HORIZON_DAYS) - 14.0:
-                        print(
-                            f"[{idx}/{n_ids}] {sid}: WARNING scan-horizon window "
-                            f"{win} to {end} (span {span:.0f}d)",
-                            flush=True,
-                        )
-                except Exception:
-                    pass
             print(f"[{idx}/{n_ids}] {sid}: {win} to {end}", flush=True)
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)

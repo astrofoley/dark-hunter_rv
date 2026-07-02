@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -17,7 +17,7 @@ from darkhunter_rv.gaia_utils import parse_gaia_metadata_from_star_summary
 from darkhunter_rv.lick_twilight_cache import (
     LICK_TZ,
     default_cache_path as default_lick_twilight_cache_path,
-    interpolate_lst_deg,
+    ensure_doy_anchors,
     nights_in_mjd_range,
 )
 from darkhunter_rv.summary_paths import parse_object_id_from_summary
@@ -28,13 +28,9 @@ LICK_LAT_DEG = float(LICK_LOCATION.lat.deg)
 
 TWILIGHT_SUN_ALT_DEG = -12.0
 MAX_AIRMASS = 1.7
-MIN_OBS_MINUTES = 30
-NIGHT_SAMPLE_MINUTES = 30
 SCAN_HORIZON_DAYS = 365
 PLOT_HORIZON_DAYS = 90
 HORIZON_DAYS = SCAN_HORIZON_DAYS
-# After merge, split if consecutive observable nights are separated by >N days.
-MAX_RUN_NIGHT_GAP_DAYS = 14
 # Astronomical circumpolar floor at Lick (never sets); APF year-round needs higher dec.
 CIRCUMPOLAR_DEC_MIN_DEG = 90.0 - LICK_LAT_DEG
 # Observable seasons longer than this in stale JSON usually mean bad ISO/MJD pairing.
@@ -137,12 +133,130 @@ def _hour_angle_midpoint_deg(ha_eve_deg: float, ha_morn_deg: float) -> float:
     return float((h_eve + delta_h / 2.0) * 15.0)
 
 
-@dataclass
-class NightRecord:
-    evening_twilight_mjd: float
-    morning_twilight_mjd: float
-    calendar_date: str
-    observable_night: bool
+def _ra_on_lst_arc(lst_start_deg: float, lst_end_deg: float, ra_deg: float) -> bool:
+    """True when RA transits on the LST arc from evening-wing to morning-wing."""
+    ra = float(ra_deg) % 360.0
+    a = float(lst_start_deg) % 360.0
+    b = float(lst_end_deg) % 360.0
+    span = (b - a) % 360.0
+    if span < 1e-9:
+        return False
+    offset = (ra - a) % 360.0
+    return offset <= span + 1e-9
+
+
+def _wing_altitude_passes(ha_deg: float, dec_deg: float) -> bool:
+    alt = _target_altitude_deg_ha(ha_deg, dec_deg)
+    return _target_observable(alt, _airmass_from_altitude_deg(alt))
+
+
+def _night_observable_doy(
+    ra_deg: float,
+    dec_deg: float,
+    anchor: Dict[str, Any],
+) -> bool:
+    """Year-independent night test: twilight wings or in-night transit at APF limits."""
+    lst_eve = float(anchor["lst_eve30_deg"])
+    lst_morn = float(anchor["lst_morn30_deg"])
+    ha_eve = _hour_angle_deg(lst_eve, ra_deg)
+    ha_morn = _hour_angle_deg(lst_morn, ra_deg)
+    if _wing_altitude_passes(ha_eve, dec_deg) or _wing_altitude_passes(ha_morn, dec_deg):
+        return True
+    if _ra_on_lst_arc(lst_eve, lst_morn, ra_deg):
+        alt_transit = _target_altitude_deg_ha(0.0, dec_deg)
+        return _target_observable(alt_transit, _airmass_from_altitude_deg(alt_transit))
+    return False
+
+
+def observable_doy_table(
+    ra_deg: float,
+    dec_deg: float,
+    anchors: Dict[str, Any],
+) -> List[bool]:
+    rows = anchors.get("rows") or []
+    return [_night_observable_doy(ra_deg, dec_deg, row) for row in rows]
+
+
+def _is_circumpolar_from_doy(dec_deg: float, observable_doy: List[bool]) -> bool:
+    if float(dec_deg) < CIRCUMPOLAR_DEC_MIN_DEG - 1e-9:
+        return False
+    if not observable_doy:
+        return False
+    return all(observable_doy)
+
+
+def _doy_from_iso(iso_date: str) -> int:
+    return datetime.strptime(iso_date, "%Y-%m-%d").timetuple().tm_yday
+
+
+def _iso_from_anchor_doy(doy: int, year: int, anchors: Dict[str, Any]) -> str:
+    rows = anchors.get("rows") or []
+    if doy < 1 or doy > len(rows):
+        raise ValueError(f"DOY {doy} out of range for anchor table ({len(rows)} rows)")
+    row = rows[doy - 1]
+    return f"{year:04d}-{int(row['month']):02d}-{int(row['day']):02d}"
+
+
+def find_season_doy_window(
+    observable_doy: List[bool],
+    today_doy: int,
+) -> Optional[Tuple[int, int]]:
+    """
+    One contiguous observable season from today (or next observable DOY forward).
+
+    Returns 1-based (start_doy, end_doy). End may wrap into the next calendar year
+    when end_doy < start_doy.
+    """
+    n = len(observable_doy)
+    if n == 0 or not any(observable_doy):
+        return None
+    today_idx = max(0, min(today_doy - 1, n - 1))
+    start_idx = None
+    for i in range(n):
+        j = (today_idx + i) % n
+        if observable_doy[j]:
+            start_idx = j
+            break
+    if start_idx is None:
+        return None
+    end_idx = start_idx
+    for j in range(start_idx + 1, n):
+        if not observable_doy[j]:
+            break
+        end_idx = j
+    return start_idx + 1, end_idx + 1
+
+
+def _season_dates_from_doy(
+    start_doy: int,
+    end_doy: int,
+    year: int,
+    anchors: Dict[str, Any],
+) -> Tuple[str, str]:
+    start_date = _iso_from_anchor_doy(start_doy, year, anchors)
+    end_year = year + 1 if end_doy < start_doy else year
+    end_date = _iso_from_anchor_doy(end_doy, end_year, anchors)
+    return start_date, end_date
+
+
+def _mjd_bounds_for_season(
+    start_doy: int,
+    end_doy: int,
+    year: int,
+    anchors: Dict[str, Any],
+    *,
+    lick_cache_path: Optional[Path] = None,
+) -> Tuple[float, float]:
+    start_date = _iso_from_anchor_doy(start_doy, year, anchors)
+    end_year = year + 1 if end_doy < start_doy else year
+    end_date = _iso_from_anchor_doy(end_doy, end_year, anchors)
+    start_row = night_row_for_evening_date(start_date, lick_cache_path=lick_cache_path)
+    end_row = night_row_for_evening_date(end_date, lick_cache_path=lick_cache_path)
+    if start_row is None or end_row is None:
+        start_mjd = float(Time(start_date, format="iso", scale="utc").mjd)
+        end_mjd = float(Time(end_date, format="iso", scale="utc").mjd)
+        return start_mjd, end_mjd
+    return float(start_row["eve_mjd"]), float(end_row["morn_mjd"])
 
 
 def twilight_nights_between(
@@ -159,81 +273,16 @@ def twilight_nights_between(
     ]
 
 
-def _night_is_observable(
-    ra_deg: float,
-    dec_deg: float,
-    row: Dict[str, Any],
-) -> bool:
-    """≥ MIN_OBS_MINUTES at airmass ≤ MAX_AIRMASS during nautical night (LST/HA geometry)."""
-    eve_mjd = float(row["eve_mjd"])
-    morn_mjd = float(row["morn_mjd"])
-    if morn_mjd <= eve_mjd:
-        return False
-    step_days = NIGHT_SAMPLE_MINUTES / (24.0 * 60.0)
-    min_steps = max(1, int(round(MIN_OBS_MINUTES / NIGHT_SAMPLE_MINUTES)))
-    streak = 0
-    mjd = eve_mjd
-    while mjd <= morn_mjd + 0.5 * step_days:
-        lst = interpolate_lst_deg(row, mjd)
-        alt = _target_altitude_at_lst(lst, ra_deg, dec_deg)
-        if _target_observable(alt, _airmass_from_altitude_deg(alt)):
-            streak += 1
-            if streak >= min_steps:
-                return True
-        else:
-            streak = 0
-        mjd += step_days
-    return False
-
-
-def _sample_nights(
-    coord: SkyCoord,
-    start_mjd: float,
-    end_mjd: float,
-    *,
-    lick_cache_path: Optional[Path] = None,
-) -> List[NightRecord]:
-    ra_deg = float(coord.ra.deg)
-    dec_deg = float(coord.dec.deg)
-    cache = lick_cache_path or default_lick_twilight_cache_path()
-    rows = nights_in_mjd_range(start_mjd, end_mjd + 1.0, cache_path=cache)
-    if not rows:
-        raise FileNotFoundError(
-            f"No Lick twilight nights in cache for MJD {start_mjd:.0f}–{end_mjd:.0f}. "
-            f"Run: python scripts/build_lick_twilight_cache.py --cache {cache}"
-        )
-    nights: List[NightRecord] = []
-    for row in rows:
-        eve_mjd = float(row["eve_mjd"])
-        if eve_mjd < start_mjd - 0.5 or eve_mjd > end_mjd + 1.0:
-            continue
-        nights.append(
-            NightRecord(
-                evening_twilight_mjd=eve_mjd,
-                morning_twilight_mjd=float(row["morn_mjd"]),
-                calendar_date=str(row["evening_date"]),
-                observable_night=_night_is_observable(ra_deg, dec_deg, row),
-            )
-        )
-    return nights
-
-
 def _is_circumpolar_for_apf(
     coord: SkyCoord,
-    nights: List[NightRecord],
+    *,
+    lick_cache_path: Optional[Path] = None,
 ) -> bool:
-    """
-    APF circumpolar: every scanned nautical night meets observability rules.
-
-    Targets with dec below the astronomical circumpolar limit at Lick can never
-    satisfy year-round APF visibility.
-    """
-    dec_deg = float(coord.dec.deg)
-    if dec_deg < CIRCUMPOLAR_DEC_MIN_DEG - 1e-9:
-        return False
-    if not nights:
-        return False
-    return all(n.observable_night for n in nights)
+    """APF circumpolar: every DOY meets twilight-wing observability rules."""
+    cache = lick_cache_path or default_lick_twilight_cache_path()
+    anchors = ensure_doy_anchors(cache_path=cache)
+    observable = observable_doy_table(float(coord.ra.deg), float(coord.dec.deg), anchors)
+    return _is_circumpolar_from_doy(float(coord.dec.deg), observable)
 
 
 def _is_circumpolar_for_apf_mjd_range(
@@ -243,113 +292,9 @@ def _is_circumpolar_for_apf_mjd_range(
     *,
     lick_cache_path: Optional[Path] = None,
 ) -> bool:
-    """Sample nights in [start_mjd, end_mjd] and apply per-night APF circumpolar test."""
-    nights = _sample_nights(coord, start_mjd, end_mjd, lick_cache_path=lick_cache_path)
-    return _is_circumpolar_for_apf(coord, nights)
-
-
-def _build_season_runs(nights: List[NightRecord]) -> List[List[NightRecord]]:
-    runs: List[List[NightRecord]] = []
-    current: List[NightRecord] = []
-    for night in nights:
-        if night.observable_night:
-            current.append(night)
-        elif current:
-            runs.append(current)
-            current = []
-    if current:
-        runs.append(current)
-    return runs
-
-
-def _run_span(run: List[NightRecord]) -> Tuple[str, str, float, float]:
-    start = run[0]
-    end = run[-1]
-    start_date = start.calendar_date
-    end_date = _lick_date_from_mjd(end.morning_twilight_mjd)
-    if end_date < start_date:
-        end_date = start_date
-    if start_date == end_date and end.morning_twilight_mjd > start.evening_twilight_mjd + 0.01:
-        try:
-            end_date = (Time(start_date, format="iso", scale="utc").to_datetime(timezone=LICK_TZ).date() + timedelta(days=1)).isoformat()
-        except Exception:
-            pass
-    return (
-        start_date,
-        end_date,
-        start.evening_twilight_mjd,
-        end.morning_twilight_mjd,
-    )
-
-
-def _season_calendar_span_days(start_date: str, end_date: str) -> float:
-    try:
-        t0 = float(Time(start_date, format="iso", scale="utc").mjd)
-        t1 = float(Time(end_date, format="iso", scale="utc").mjd)
-        return t1 - t0
-    except Exception:
-        return 0.0
-
-
-def _distance_to_run_mjd(today_mjd: float, run: List[NightRecord]) -> float:
-    """Days from today to the nearest point in an observable run (0 if today is inside)."""
-    start_mjd = run[0].evening_twilight_mjd
-    end_mjd = run[-1].morning_twilight_mjd
-    if start_mjd <= today_mjd <= end_mjd + 1.0:
-        return 0.0
-    if today_mjd < start_mjd:
-        return start_mjd - today_mjd
-    return today_mjd - end_mjd
-
-
-def _split_run_at_night_gaps(
-    run: List[NightRecord],
-    *,
-    max_gap_days: float = MAX_RUN_NIGHT_GAP_DAYS,
-) -> List[List[NightRecord]]:
-    """Split when missing Lick-cache calendar rows leave multi-day holes in a run."""
-    if not run:
-        return []
-    pieces: List[List[NightRecord]] = [[run[0]]]
-    for night in run[1:]:
-        gap = night.evening_twilight_mjd - pieces[-1][-1].morning_twilight_mjd
-        if gap > max_gap_days:
-            pieces.append([night])
-        else:
-            pieces[-1].append(night)
-    return pieces
-
-
-def _all_season_runs(nights: List[NightRecord]) -> List[List[NightRecord]]:
-    """Contiguous observable calendar days; no gap-merging across unobservable nights."""
-    runs = _build_season_runs(nights)
-    out: List[List[NightRecord]] = []
-    for run in runs:
-        out.extend(_split_run_at_night_gaps(run))
-    return out
-
-
-def _find_best_window(
-    nights: List[NightRecord],
-    today_mjd: float,
-    *,
-    today_start_mjd: Optional[float] = None,
-) -> Optional[Tuple[str, str, float, float]]:
-    """Single observable season (contiguous calendar days) closest to today."""
-    if today_start_mjd is None:
-        today_start_mjd = float(Time(_lick_date_from_mjd(today_mjd), format="iso", scale="utc").mjd)
-    runs = _all_season_runs(nights)
-    runs = [run for run in runs if run[-1].morning_twilight_mjd >= today_mjd - 0.5]
-    if not runs:
-        return None
-    best = min(
-        runs,
-        key=lambda run: (
-            _distance_to_run_mjd(today_mjd, run),
-            run[0].evening_twilight_mjd,
-        ),
-    )
-    return _run_span(best)
+    """Year-independent circumpolar test (MJD range ignored; kept for tests)."""
+    del start_mjd, end_mjd
+    return _is_circumpolar_for_apf(coord, lick_cache_path=lick_cache_path)
 
 
 @dataclass
@@ -466,21 +411,36 @@ def compute_apf_observability(
     lick_cache_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """
-    APF visibility at Lick from reference-now through +scan_horizon_days.
+    APF visibility at Lick from year-independent DOY twilight-wing geometry.
 
     Always anchored to Time.now() (Pacific calendar date at Lick) unless start_mjd
-    is passed for tests. Returns the single contiguous observable season closest
-    to reference-now (breaks on any unobservable calendar day).
-    Plot shading still caps at plot_horizon_days in rv_keplerian_plots.
+    is passed for tests. Returns one contiguous observable season from today (or
+  the next observable DOY forward). Plot shading still caps at plot_horizon_days
+    in rv_keplerian_plots.
     """
+    del scan_horizon_days
     now_mjd, today_iso, today_start_mjd = reference_now(start_mjd)
     plot_end_mjd = now_mjd + float(plot_horizon_days)
-    scan_end_mjd = now_mjd + float(scan_horizon_days)
+    year = int(today_iso[:4])
+    today_doy = _doy_from_iso(today_iso)
 
-    nights = _sample_nights(coord, today_start_mjd, scan_end_mjd, lick_cache_path=lick_cache_path)
-    nights_forward = [n for n in nights if n.evening_twilight_mjd >= today_start_mjd - 0.5]
+    cache = lick_cache_path or default_lick_twilight_cache_path()
+    try:
+        anchors = ensure_doy_anchors(cache_path=cache)
+    except RuntimeError as exc:
+        raise FileNotFoundError(str(exc)) from exc
+    rows = anchors.get("rows") or []
+    if not rows:
+        raise FileNotFoundError(
+            f"No DOY anchor table beside {cache}. "
+            "Run: python scripts/build_lick_twilight_cache.py"
+        )
 
-    if _is_circumpolar_for_apf(coord, nights_forward):
+    ra_deg = float(coord.ra.deg)
+    dec_deg = float(coord.dec.deg)
+    observable = observable_doy_table(ra_deg, dec_deg, anchors)
+
+    if _is_circumpolar_from_doy(dec_deg, observable):
         win = ObsWindow(now_mjd, plot_end_mjd, "", "")
         return {
             "circumpolar": True,
@@ -489,19 +449,24 @@ def compute_apf_observability(
             "next_window_end_date": "",
         }
 
-    season = _find_best_window(
-        nights_forward,
-        now_mjd,
-        today_start_mjd=today_start_mjd,
-    )
-
+    season = find_season_doy_window(observable, today_doy)
     if season is None:
         return {"circumpolar": False, "windows": []}
 
-    start_date, end_date, start_mjd_win, end_mjd_win = season
-    if start_mjd_win < today_start_mjd - 0.01 and end_mjd_win >= now_mjd:
-        start_mjd_win = today_start_mjd
+    start_doy, end_doy = season
+    start_date, end_date = _season_dates_from_doy(start_doy, end_doy, year, anchors)
+    start_mjd_win, end_mjd_win = _mjd_bounds_for_season(
+        start_doy,
+        end_doy,
+        year,
+        anchors,
+        lick_cache_path=cache,
+    )
+
+    if start_date < today_iso <= end_date:
         start_date = today_iso
+        start_mjd_win = today_start_mjd
+
     win = ObsWindow(start_mjd_win, end_mjd_win, start_date, end_date)
     return normalize_observability_window(
         {

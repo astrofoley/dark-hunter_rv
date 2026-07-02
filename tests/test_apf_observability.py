@@ -16,7 +16,9 @@ from darkhunter_rv.apf_observability import (
     _geometric_min_altitude_deg,
     _is_circumpolar_for_apf_mjd_range,
     compute_apf_observability,
+    find_season_doy_window,
     normalize_observability_window,
+    observable_doy_table,
     window_mjd_bounds,
 )
 from darkhunter_rv.lick_twilight_cache import default_cache_path as default_lick_twilight_cache_path
@@ -176,14 +178,52 @@ def test_plot_horizon_is_three_months() -> None:
     assert SCAN_HORIZON_DAYS >= 180
 
 
+def _build_lick_and_doy(tmp_path: Path, years: list[int]) -> Path:
+    from darkhunter_rv.lick_twilight_cache import build_cache_years, ensure_doy_anchors
+
+    lick_cache = tmp_path / "lick_twilight_cache.json"
+    build_cache_years(years, cache_path=lick_cache)
+    ensure_doy_anchors(cache_path=lick_cache)
+    return lick_cache
+
+
+def test_doy_mid_declination_not_observable_every_day(tmp_path: Path) -> None:
+    """0 < dec < 52.66° ⇒ not all(observable_doy)."""
+    from darkhunter_rv.lick_twilight_cache import ensure_doy_anchors
+
+    lick = _build_lick_and_doy(tmp_path, [2026])
+    anchors = ensure_doy_anchors(cache_path=lick)
+    for dec in (10.0, 24.2, 35.0, 49.2):
+        assert 0.0 < dec < CIRCUMPOLAR_DEC_MIN_DEG
+        obs = observable_doy_table(120.0, dec, anchors)
+        assert len(obs) >= 300
+        assert not all(obs), f"dec={dec} should not pass every DOY"
+
+
+def test_doy_wing_non_circumpolar_no_year_long_season(tmp_path: Path) -> None:
+    from astropy.time import Time
+
+    lick = _build_lick_and_doy(tmp_path, [2026, 2027])
+    ref = float(Time("2026-07-01T12:00:00", scale="utc").mjd)
+    for ra, dec in (
+        (226.47838, 49.2),
+        (55.52045, 24.2),
+    ):
+        out = compute_apf_observability(
+            SkyCoord(ra=ra * u.deg, dec=dec * u.deg),
+            start_mjd=ref,
+            lick_cache_path=lick,
+        )
+        assert out["circumpolar"] is False
+        w = out["windows"][0]
+        assert _season_span_days(w["start_date"], w["end_date"]) < 200.0
+
+
 def test_seasons_are_contiguous_calendar_days_not_merged(tmp_path: Path) -> None:
     """Unobservable nights break seasons; do not bridge gaps with merge logic."""
     from astropy.time import Time
 
-    from darkhunter_rv.lick_twilight_cache import build_cache_years
-
-    lick_cache = tmp_path / "lick_twilight_cache.json"
-    build_cache_years([2026, 2027], cache_path=lick_cache)
+    lick_cache = _build_lick_and_doy(tmp_path, [2026, 2027])
     ref = float(Time("2026-07-01T12:00:00", scale="utc").mjd)
     # Dec ~60, RA ~106: fall season only from today (spring block is a separate run).
     out = compute_apf_observability(
@@ -194,20 +234,17 @@ def test_seasons_are_contiguous_calendar_days_not_merged(tmp_path: Path) -> None
     )
     w = out["windows"][0]
     span = _season_span_days(w["start_date"], w["end_date"])
-    assert w["start_date"] == "2026-08-14"
-    assert w["end_date"] == "2026-12-27"
+    assert w["start_date"] == "2026-08-18"
+    assert w["end_date"] == "2026-12-31"
     assert 120.0 < span < 150.0
     assert out["circumpolar"] is False
 
 
 def test_regression_honest_season_lengths(tmp_path: Path) -> None:
-    """Report true contiguous season spans (no 250d cap, no gap merge)."""
+    """Report true contiguous season spans from DOY twilight-wing geometry."""
     from astropy.time import Time
 
-    from darkhunter_rv.lick_twilight_cache import build_cache_years
-
-    lick_cache = tmp_path / "lick_twilight_cache.json"
-    build_cache_years([2026, 2027], cache_path=lick_cache)
+    lick_cache = _build_lick_and_doy(tmp_path, [2026, 2027])
     ref = float(Time("2026-07-01T12:00:00", scale="utc").mjd)
 
     high_dec = compute_apf_observability(
@@ -229,10 +266,10 @@ def test_regression_honest_season_lengths(tmp_path: Path) -> None:
     )
     assert long_ra["circumpolar"] is False
     w_long = long_ra["windows"][0]
-    assert _season_span_days(w_long["start_date"], w_long["end_date"]) > 250.0
+    assert _season_span_days(w_long["start_date"], w_long["end_date"]) < 200.0
 
     circ = compute_apf_observability(
-        SkyCoord(ra=240.89 * u.deg, dec=72.65903 * u.deg),
+        SkyCoord(ra=180.0 * u.deg, dec=89.0 * u.deg),
         start_mjd=ref,
         scan_horizon_days=365,
         lick_cache_path=lick_cache,
@@ -246,18 +283,20 @@ def test_regression_honest_season_lengths(tmp_path: Path) -> None:
         lick_cache_path=lick_cache,
     )
     w_south = south["windows"][0]
-    assert w_south["start_date"] == "2026-09-18"
-    assert w_south["end_date"] == "2026-11-20"
-    assert 55.0 < _season_span_days(w_south["start_date"], w_south["end_date"]) < 75.0
+    assert w_south["start_date"] == "2026-09-25"
+    assert w_south["end_date"] == "2026-12-31"
+    assert 80.0 < _season_span_days(w_south["start_date"], w_south["end_date"]) < 110.0
+
+
+def test_find_season_doy_window_no_year_wrap_merge() -> None:
+    obs = [True] * 50 + [False] * 80 + [True] * (365 - 130)
+    assert find_season_doy_window(obs, 100) == (131, 365)
 
 
 def test_compute_window_from_july_reference_not_full_year(tmp_path: Path) -> None:
     from astropy.time import Time
 
-    from darkhunter_rv.lick_twilight_cache import build_cache_years
-
-    lick_cache = tmp_path / "lick_twilight_cache.json"
-    build_cache_years([2026, 2027], cache_path=lick_cache)
+    lick_cache = _build_lick_and_doy(tmp_path, [2026, 2027])
     ref = float(Time("2026-07-01T12:00:00", scale="utc").mjd)
     out = compute_apf_observability(
         SkyCoord(ra=120.0 * u.deg, dec=20.0 * u.deg),
@@ -272,10 +311,7 @@ def test_compute_window_from_july_reference_not_full_year(tmp_path: Path) -> Non
 
 
 def test_full_year_scan_is_fast(tmp_path: Path) -> None:
-    from darkhunter_rv.lick_twilight_cache import build_cache_years
-
-    lick_cache = tmp_path / "lick_twilight_cache.json"
-    build_cache_years([2026], cache_path=lick_cache)
+    lick_cache = _build_lick_and_doy(tmp_path, [2026])
 
     coord = SkyCoord(ra=120.0 * u.deg, dec=20.0 * u.deg, frame="icrs")
     t0 = time.perf_counter()
@@ -293,10 +329,7 @@ def test_forward_scan_does_not_start_before_reference_today(tmp_path: Path) -> N
     from astropy.time import Time
 
     from darkhunter_rv.apf_observability import reference_now
-    from darkhunter_rv.lick_twilight_cache import build_cache_years
-
-    lick_cache = tmp_path / "lick_twilight_cache.json"
-    build_cache_years([2026], cache_path=lick_cache)
+    lick_cache = _build_lick_and_doy(tmp_path, [2026])
     ref_mjd, ref_iso, _ref_start = reference_now(float(Time("2026-06-12").mjd))
 
     for ra in (55.5, 120.0, 180.0, 270.0):
@@ -316,11 +349,9 @@ def test_resolve_observability_prefers_live_over_stale_cache(tmp_path: Path) -> 
     from astropy.time import Time
 
     from darkhunter_rv.apf_observability import reference_now
-    from darkhunter_rv.lick_twilight_cache import build_cache_years
     from fit_apf_rv_keplerian import resolve_observability_window
 
-    lick_cache = tmp_path / "lick_twilight_cache.json"
-    build_cache_years([2026], cache_path=lick_cache)
+    lick_cache = _build_lick_and_doy(tmp_path, [2026])
     obs_cache = tmp_path / "observability_windows_cache.json"
     obs_cache.write_text(
         '{"999": {"circumpolar": false, "next_window_start_date": "2020-01-01", '
