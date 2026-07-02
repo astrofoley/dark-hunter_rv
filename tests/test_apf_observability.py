@@ -70,10 +70,8 @@ def test_dec_below_lick_lat_never_circumpolar() -> None:
     assert out["circumpolar"] is False
     if out.get("windows"):
         w = out["windows"][0]
-        span = float(Time(w["end_date"], format="iso", scale="utc").mjd) - float(
-            Time(w["start_date"], format="iso", scale="utc").mjd
-        )
-        assert span < 250.0
+        assert w["start_date"] <= w["end_date"]
+        assert w["end_mjd"] > w["start_mjd"]
 
 
 def test_dec_58_not_circumpolar() -> None:
@@ -178,76 +176,79 @@ def test_plot_horizon_is_three_months() -> None:
     assert SCAN_HORIZON_DAYS >= 180
 
 
-def test_season_window_not_full_scan_year() -> None:
-    """Merged runs must not bridge separate seasons into a ~365d window."""
+def test_seasons_are_contiguous_calendar_days_not_merged(tmp_path: Path) -> None:
+    """Unobservable nights break seasons; do not bridge gaps with merge logic."""
     from astropy.time import Time
 
-    ref = float(Time("2026-06-17T14:00:00", scale="utc").mjd)
-    lick = default_lick_twilight_cache_path()
-    for ra, dec in ((55.52045, 57.90254), (120.0, 20.0), (180.0, 45.0)):
-        out = compute_apf_observability(
-            SkyCoord(ra=ra * u.deg, dec=dec * u.deg),
-            start_mjd=ref,
-            scan_horizon_days=365,
-            lick_cache_path=lick,
-        )
-        if not out.get("windows"):
-            continue
-        w = out["windows"][0]
-        date_span = float(Time(w["end_date"], format="iso", scale="utc").mjd) - float(
-            Time(w["start_date"], format="iso", scale="utc").mjd
-        )
-        assert date_span < 250.0, (ra, dec, w["start_date"], w["end_date"])
+    from darkhunter_rv.lick_twilight_cache import build_cache_years
+
+    lick_cache = tmp_path / "lick_twilight_cache.json"
+    build_cache_years([2026, 2027], cache_path=lick_cache)
+    ref = float(Time("2026-07-01T12:00:00", scale="utc").mjd)
+    # Dec ~60, RA ~106: fall season only from today (spring block is a separate run).
+    out = compute_apf_observability(
+        SkyCoord(ra=105.88890 * u.deg, dec=60.07812 * u.deg),
+        start_mjd=ref,
+        scan_horizon_days=365,
+        lick_cache_path=lick_cache,
+    )
+    w = out["windows"][0]
+    span = _season_span_days(w["start_date"], w["end_date"])
+    assert w["start_date"] == "2026-08-14"
+    assert w["end_date"] == "2026-12-27"
+    assert 120.0 < span < 150.0
+    assert out["circumpolar"] is False
 
 
-def test_trim_run_calendar_span_caps_scan_horizon_merge() -> None:
+def test_regression_honest_season_lengths(tmp_path: Path) -> None:
+    """Report true contiguous season spans (no 250d cap, no gap merge)."""
     from astropy.time import Time
 
-    from darkhunter_rv.apf_observability import (
-        MAX_SEASON_CALENDAR_DAYS,
-        NightRecord,
-        _trim_run_calendar_span,
-    )
+    from darkhunter_rv.lick_twilight_cache import build_cache_years
 
-    ref_mjd = float(Time("2026-07-01T12:00:00", scale="utc").mjd)
-    today_start = float(Time("2026-07-01", format="iso", scale="utc").mjd)
-    year_run: list[NightRecord] = []
-    for day in range(365):
-        eve = today_start + float(day) + 0.75
-        year_run.append(
-            NightRecord(
-                evening_twilight_mjd=eve,
-                morning_twilight_mjd=eve + 0.4,
-                calendar_date=Time(eve, format="mjd").to_datetime().date().isoformat(),
-                observable_night=True,
-            )
-        )
-    trimmed = _trim_run_calendar_span(
-        year_run,
-        today_mjd=ref_mjd,
-        today_start_mjd=today_start,
-    )
-    assert trimmed
-    start_date = trimmed[0].calendar_date
-    end_date = Time(trimmed[-1].morning_twilight_mjd, format="mjd").to_datetime().date().isoformat()
-    span = float(Time(end_date, format="iso", scale="utc").mjd) - float(
-        Time(start_date, format="iso", scale="utc").mjd
-    )
-    assert span <= MAX_SEASON_CALENDAR_DAYS
-    assert trimmed[0].evening_twilight_mjd >= today_start - 0.5
+    lick_cache = tmp_path / "lick_twilight_cache.json"
+    build_cache_years([2026, 2027], cache_path=lick_cache)
+    ref = float(Time("2026-07-01T12:00:00", scale="utc").mjd)
 
-
-def test_clamp_season_dates_caps_year_long_output() -> None:
-    from darkhunter_rv.apf_observability import _clamp_season_dates
-
-    start_date, end_date, start_mjd, end_mjd = _clamp_season_dates(
-        "2026-07-01",
-        "2027-07-02",
-        61222.0,
-        61588.0,
+    high_dec = compute_apf_observability(
+        SkyCoord(ra=226.47838 * u.deg, dec=71.13443 * u.deg),
+        start_mjd=ref,
+        scan_horizon_days=365,
+        lick_cache_path=lick_cache,
     )
-    assert end_date < "2027-07-02"
-    assert _season_span_days(start_date, end_date) <= 250.0
+    w_high = high_dec["windows"][0]
+    assert high_dec["circumpolar"] is False
+    assert w_high["start_date"] == "2026-07-01"
+    assert _season_span_days(w_high["start_date"], w_high["end_date"]) < 200.0
+
+    long_ra = compute_apf_observability(
+        SkyCoord(ra=133.35 * u.deg, dec=79.35526 * u.deg),
+        start_mjd=ref,
+        scan_horizon_days=365,
+        lick_cache_path=lick_cache,
+    )
+    assert long_ra["circumpolar"] is False
+    w_long = long_ra["windows"][0]
+    assert _season_span_days(w_long["start_date"], w_long["end_date"]) > 250.0
+
+    circ = compute_apf_observability(
+        SkyCoord(ra=240.89 * u.deg, dec=72.65903 * u.deg),
+        start_mjd=ref,
+        scan_horizon_days=365,
+        lick_cache_path=lick_cache,
+    )
+    assert circ["circumpolar"] is True
+
+    south = compute_apf_observability(
+        SkyCoord(ra=88.47149811045604 * u.deg, dec=-13.832018959067552 * u.deg),
+        start_mjd=ref,
+        scan_horizon_days=365,
+        lick_cache_path=lick_cache,
+    )
+    w_south = south["windows"][0]
+    assert w_south["start_date"] == "2026-09-18"
+    assert w_south["end_date"] == "2026-11-20"
+    assert 55.0 < _season_span_days(w_south["start_date"], w_south["end_date"]) < 75.0
 
 
 def test_compute_window_from_july_reference_not_full_year(tmp_path: Path) -> None:
@@ -266,9 +267,8 @@ def test_compute_window_from_july_reference_not_full_year(tmp_path: Path) -> Non
     )
     assert out.get("windows")
     w = out["windows"][0]
-    span = _season_span_days(w["start_date"], w["end_date"])
-    assert span < 250.0, (w["start_date"], w["end_date"])
     assert w["start_date"] >= "2026-07-01"
+    assert w["start_date"] <= w["end_date"]
 
 
 def test_full_year_scan_is_fast(tmp_path: Path) -> None:

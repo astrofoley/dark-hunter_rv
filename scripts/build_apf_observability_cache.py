@@ -169,8 +169,12 @@ def main() -> int:
                     span = float(Time(end, format="iso", scale="utc").mjd) - float(
                         Time(win, format="iso", scale="utc").mjd
                     )
-                    if span > 250.0:
-                        print(f"[{idx}/{n_ids}] {sid}: WARNING long window {win} to {end}", flush=True)
+                    if span >= float(SCAN_HORIZON_DAYS) - 14.0:
+                        print(
+                            f"[{idx}/{n_ids}] {sid}: WARNING scan-horizon window "
+                            f"{win} to {end} (span {span:.0f}d)",
+                            flush=True,
+                        )
                 except Exception:
                     pass
             print(f"[{idx}/{n_ids}] {sid}: {win} to {end}", flush=True)

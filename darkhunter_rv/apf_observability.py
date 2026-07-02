@@ -33,13 +33,11 @@ NIGHT_SAMPLE_MINUTES = 30
 SCAN_HORIZON_DAYS = 365
 PLOT_HORIZON_DAYS = 90
 HORIZON_DAYS = SCAN_HORIZON_DAYS
-# Merge only brief intra-season gaps (weather); inter-season gaps are much longer.
-MERGE_RUN_GAP_DAYS = 12
 # After merge, split if consecutive observable nights are separated by >N days.
 MAX_RUN_NIGHT_GAP_DAYS = 14
 # Astronomical circumpolar floor at Lick (never sets); APF year-round needs higher dec.
 CIRCUMPOLAR_DEC_MIN_DEG = 90.0 - LICK_LAT_DEG
-# Observable seasons longer than this are almost certainly stale cache merges.
+# Observable seasons longer than this in stale JSON usually mean bad ISO/MJD pairing.
 MAX_SEASON_CALENDAR_DAYS = 250.0
 
 
@@ -264,23 +262,6 @@ def _build_season_runs(nights: List[NightRecord]) -> List[List[NightRecord]]:
     return runs
 
 
-def _merge_close_runs(
-    runs: List[List[NightRecord]],
-    *,
-    gap_days: float = MERGE_RUN_GAP_DAYS,
-) -> List[List[NightRecord]]:
-    if not runs:
-        return []
-    merged: List[List[NightRecord]] = [list(runs[0])]
-    for run in runs[1:]:
-        gap = run[0].evening_twilight_mjd - merged[-1][-1].morning_twilight_mjd
-        if gap <= gap_days:
-            merged[-1].extend(run)
-        else:
-            merged.append(list(run))
-    return merged
-
-
 def _run_span(run: List[NightRecord]) -> Tuple[str, str, float, float]:
     start = run[0]
     end = run[-1]
@@ -326,7 +307,7 @@ def _split_run_at_night_gaps(
     *,
     max_gap_days: float = MAX_RUN_NIGHT_GAP_DAYS,
 ) -> List[List[NightRecord]]:
-    """Split a run where merged seasons left a multi-week hole between nights."""
+    """Split when missing Lick-cache calendar rows leave multi-day holes in a run."""
     if not run:
         return []
     pieces: List[List[NightRecord]] = [[run[0]]]
@@ -340,82 +321,12 @@ def _split_run_at_night_gaps(
 
 
 def _all_season_runs(nights: List[NightRecord]) -> List[List[NightRecord]]:
-    runs = _merge_close_runs(_build_season_runs(nights))
+    """Contiguous observable calendar days; no gap-merging across unobservable nights."""
+    runs = _build_season_runs(nights)
     out: List[List[NightRecord]] = []
     for run in runs:
         out.extend(_split_run_at_night_gaps(run))
     return out
-
-
-def _trim_run_calendar_span(
-    run: List[NightRecord],
-    *,
-    today_mjd: float,
-    today_start_mjd: float,
-    max_calendar_days: float = MAX_SEASON_CALENDAR_DAYS,
-) -> List[NightRecord]:
-    """Cap an oversized merged run to one observable season near today."""
-    if not run:
-        return run
-    start_date, end_date, _, _ = _run_span(run)
-    if _season_calendar_span_days(start_date, end_date) <= max_calendar_days:
-        return run
-
-    pieces = _split_run_at_night_gaps(run)
-    candidate_runs = pieces if pieces else [run]
-    containing = [
-        piece
-        for piece in candidate_runs
-        if piece[0].evening_twilight_mjd <= today_mjd <= piece[-1].morning_twilight_mjd + 1.0
-    ]
-    if containing:
-        chosen = containing[0]
-    else:
-        future = [
-            piece
-            for piece in candidate_runs
-            if piece[-1].morning_twilight_mjd >= today_start_mjd - 0.5
-        ]
-        pool = future if future else candidate_runs
-        chosen = min(pool, key=lambda piece: _distance_to_run_mjd(today_mjd, piece))
-
-    start_date, end_date, _, _ = _run_span(chosen)
-    if _season_calendar_span_days(start_date, end_date) <= max_calendar_days:
-        return chosen
-
-    # Observable on most nights in the scan horizon: cap forward from today.
-    cap_end_mjd = today_start_mjd + max_calendar_days
-    trimmed = [
-        night
-        for night in chosen
-        if today_start_mjd - 0.5 <= night.evening_twilight_mjd <= cap_end_mjd
-    ]
-    if trimmed:
-        return trimmed
-    trimmed = [night for night in chosen if night.evening_twilight_mjd >= today_start_mjd - 0.5]
-    if trimmed:
-        cap_end_mjd = trimmed[0].evening_twilight_mjd + max_calendar_days
-        return [night for night in trimmed if night.evening_twilight_mjd <= cap_end_mjd] or trimmed[:1]
-    return chosen[:1]
-
-
-def _clamp_season_dates(
-    start_date: str,
-    end_date: str,
-    start_mjd: float,
-    end_mjd: float,
-    *,
-    max_calendar_days: float = MAX_SEASON_CALENDAR_DAYS,
-) -> Tuple[str, str, float, float]:
-    """Hard cap on reported season length (safety net after run trimming)."""
-    if _season_calendar_span_days(start_date, end_date) <= max_calendar_days:
-        return start_date, end_date, start_mjd, end_mjd
-    cap_end_mjd = float(Time(start_date, format="iso", scale="utc").mjd) + max_calendar_days
-    end_mjd = min(float(end_mjd), cap_end_mjd)
-    end_date = _lick_date_from_mjd(end_mjd)
-    if end_date < start_date:
-        end_date = start_date
-    return start_date, end_date, start_mjd, end_mjd
 
 
 def _find_best_window(
@@ -424,7 +335,7 @@ def _find_best_window(
     *,
     today_start_mjd: Optional[float] = None,
 ) -> Optional[Tuple[str, str, float, float]]:
-    """Observable season closest to today (not a scan-horizon-spanning merge)."""
+    """Single observable season (contiguous calendar days) closest to today."""
     if today_start_mjd is None:
         today_start_mjd = float(Time(_lick_date_from_mjd(today_mjd), format="iso", scale="utc").mjd)
     runs = _all_season_runs(nights)
@@ -437,11 +348,6 @@ def _find_best_window(
             _distance_to_run_mjd(today_mjd, run),
             run[0].evening_twilight_mjd,
         ),
-    )
-    best = _trim_run_calendar_span(
-        best,
-        today_mjd=today_mjd,
-        today_start_mjd=today_start_mjd,
     )
     return _run_span(best)
 
@@ -563,7 +469,8 @@ def compute_apf_observability(
     APF visibility at Lick from reference-now through +scan_horizon_days.
 
     Always anchored to Time.now() (Pacific calendar date at Lick) unless start_mjd
-    is passed for tests. Returns the observable run closest to reference-now.
+    is passed for tests. Returns the single contiguous observable season closest
+    to reference-now (breaks on any unobservable calendar day).
     Plot shading still caps at plot_horizon_days in rv_keplerian_plots.
     """
     now_mjd, today_iso, today_start_mjd = reference_now(start_mjd)
@@ -595,12 +502,6 @@ def compute_apf_observability(
     if start_mjd_win < today_start_mjd - 0.01 and end_mjd_win >= now_mjd:
         start_mjd_win = today_start_mjd
         start_date = today_iso
-    start_date, end_date, start_mjd_win, end_mjd_win = _clamp_season_dates(
-        start_date,
-        end_date,
-        start_mjd_win,
-        end_mjd_win,
-    )
     win = ObsWindow(start_mjd_win, end_mjd_win, start_date, end_date)
     return normalize_observability_window(
         {
