@@ -1,82 +1,47 @@
 #!/usr/bin/env bash
 # Quick website table + frontend repair (no Keplerian refit, no plot rebuild).
 #
-# - Deploys website/rv → WEB_ROOT (script.js builds plot cells by header name)
-# - Normalizes tables/data.csv column order and clears stray <img> in mass columns
-# - Does not touch repo-root bias_statistics.txt (mask debias table is manual-only).
-# - Fills M2 / M2 sin i / M2 at i / NEXT RV EVENT from existing rv_fit_reports JSON (if present)
+# By default runs phase 2 only (fast): deploy static site + refresh data.csv.
+# Slow Gaia TAP queries are separated — run once first:
+#   bash scripts/query_website_gaia.sh
 #
-# Run this first, then full_website_refresh.sh when you are ready for a long refit pass.
+# To include Gaia queries in this run (legacy combined behavior):
+#   RUN_GAIA_QUERIES=1 bash scripts/repair_website_table.sh
+#
+# Phased workflow (see docs/website.md):
+#   1. bash scripts/query_website_gaia.sh          # Gaia summaries (slow)
+#   2. bash scripts/update_website_table_only.sh   # table + UI (fast)
+#   3. bash scripts/replot_rv_website.sh           # RV + fit plots (no refit)
+#   4. bash scripts/refit_all_per_object.sh        # full pipeline refit
+#
+# Does not touch repo-root bias_statistics.txt (mask debias table is manual-only).
 #
 # Usage (ziggy):
 #   cd /data2/darkhunter/dark-hunter_rv
-#   git pull   # needs PR #22+ (website_table_csv.py, script.js)
-#   bash scripts/repair_website_table.sh
-#
-# Three operational commands (see docs/website.md):
-#   bash scripts/update_hbeta_website.sh              # Hβ + stage only
-#   screen ... bash scripts/full_website_refresh.sh   # per-star pipeline+fit+site
-#   screen ... bash scripts/refit_all_per_object.sh   # same (no CSV repair preamble)
+#   git pull
+#   bash scripts/query_website_gaia.sh              # once, if summaries missing
+#   bash scripts/repair_website_table.sh            # or: update_website_table_only.sh
 
 set -euo pipefail
 
 REPO="${REPO:-/data2/darkhunter/dark-hunter_rv}"
-OUT="${OUT:-$REPO/output}"
-WEB_ROOT="${WEB_ROOT:-/var/www/html/darkhunter/rv}"
-REPORTS_DIR="${REPORTS_DIR:-$REPO/rv_fit_reports}"
-PY="${PY:-/home/marley/anaconda2/envs/gaia-env/bin/python}"
 LOG="${LOG:-$REPO/logs/repair_website_table.log}"
 
 cd "$REPO"
 mkdir -p "$(dirname "$LOG")" "$REPO/logs"
-export PYTHONPATH="$REPO"
-export DARKHUNTER_OUTPUT_DIR="$OUT"
 
 exec > >(tee -a "$LOG") 2>&1
 echo "=== $(date -Is) repair_website_table start (pid $$) ==="
-echo "repo=$REPO web_root=$WEB_ROOT out=$OUT reports=$REPORTS_DIR"
 
-if [[ ! -f "$WEB_ROOT/tables/data.csv" ]]; then
-  echo "[ERROR] $WEB_ROOT/tables/data.csv missing — run scripts/bootstrap_website_tables.sh first." >&2
-  exit 2
+if [[ "${RUN_GAIA_QUERIES:-0}" == "1" ]]; then
+  echo "=== RUN_GAIA_QUERIES=1: phase 1 Gaia queries ==="
+  bash scripts/query_website_gaia.sh
 fi
 
-echo "=== Deploy script.js / style.css / index.html ==="
-export WEB_ROOT
-bash scripts/setup_website.sh
-
-echo "=== Sample stars (ATF22 / E24): summaries + table rows (no bias rebuild) ==="
-"$PY" scripts/ensure_sample_stars_website.py \
-  --data-csv "$WEB_ROOT/tables/data.csv" \
-  --output-dir "$OUT" \
-  --plots-root "$OUT" \
-  --reports-dir "$REPORTS_DIR" \
-  --web-root "$WEB_ROOT" \
-  --with-plots
-
-echo "=== Patch Gaia G/BP/RP photometry in sample summaries ==="
-"$PY" scripts/patch_summary_gaia_photometry.py --output-dir "$OUT"
-
-if [[ ! -f "$REPO/scripts/update_website_table_columns.py" ]]; then
-  echo "[ERROR] scripts/update_website_table_columns.py missing — git pull (merge PR #22+) first." >&2
-  exit 2
-fi
-
-if [[ "${PREFETCH_GAIA_NSS:-0}" == "1" ]]; then
-  echo "=== Prefetch Gaia NSS (inclination, binary masses) for table stars ==="
-  PYTHONPATH=. "$PY" scripts/prefetch_gaia_nss_for_table.py \
-    --data-csv "$WEB_ROOT/tables/data.csv" \
-    --reports-dir "$REPORTS_DIR"
-fi
-
-echo "=== Normalize data.csv + fill columns from existing summaries/reports ==="
-echo "M2 at i requires Gaia Inclination (summary [GAIA METADATA] or PREFETCH_GAIA_NSS=1); not copied from M2 sin i."
-"$PY" scripts/update_website_table_columns.py \
-  --data-csv "$WEB_ROOT/tables/data.csv" \
-  --output-dir "$OUT" \
-  --reports-dir "$REPORTS_DIR"
+bash scripts/update_website_table_only.sh
 
 echo "=== $(date -Is) repair_website_table done ==="
-echo "Next: hard-refresh the browser, then when ready:"
+echo "Optional next steps:"
+echo "  bash scripts/replot_rv_website.sh"
 echo "  bash scripts/full_website_refresh.sh"
 echo "Log: $LOG"

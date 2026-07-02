@@ -90,7 +90,105 @@ Ensure Apache serves `/var/www/html/darkhunter/rv/` (existing `Alias` or symlink
 
 Plot scripts (`plot_rv_from_summaries.py`, `build_hbeta_website_plots.py`, `replot_rv_figures_from_fits.py`) **auto-copy** contract PNGs into `WEB_ROOT/stars/Gaia_DR3_<id>/Gaia/Plots/` when `WEB_ROOT` is set (or pass `--web-root`). Use `--no-sync-website` to skip. Pipeline output under `output/Gaia_DR3_<id>/` remains the canonical build tree; the website copy is updated immediately after each plot is written.
 
-**Sample filters:** checkboxes ATF22 / E24 NS / E24 Full (union when multiple checked); membership in `tables/sample_tags.json`.
+**Sample filters:** checkboxes ATF22 / E24 NS / E24 Full (union when multiple checked); membership in `tables/sample_tags.json` and embedded `sample_tags_data.js`.
+
+## Four-phase workflow (ziggy)
+
+Gaia TAP queries for ATF22/E24 sample stars are **slow** (~70 sources). They are separated from fast table/UI updates. None of these phases run `rebuild_mask_bias.sh`; phase 4 uses the existing repo-root `bias_statistics.txt`.
+
+Paths: `REPO=/data2/darkhunter/dark-hunter_rv`, `PY=/home/marley/anaconda2/envs/gaia-env/bin/python`, `WEB_ROOT=/var/www/html/darkhunter/rv`, `OUT=$REPO/output`, `REPORTS_DIR=$REPO/rv_fit_reports`, `SPEC_ROOT=/data2/gaia_stars/apf_reductions`.
+
+```bash
+export REPO=/data2/darkhunter/dark-hunter_rv
+export PY=/home/marley/anaconda2/envs/gaia-env/bin/python
+export PYTHONPATH="$REPO"
+export WEB_ROOT=/var/www/html/darkhunter/rv
+export OUT="$REPO/output"
+export REPORTS_DIR="$REPO/rv_fit_reports"
+export SPEC_ROOT=/data2/gaia_stars/apf_reductions
+cd "$REPO" && git pull origin website-updates
+```
+
+**Recommended order:** phase 1 → 2 → (3 and/or 4). After a full refit (phase 4), rerun phase 3 if you want replotted figures from stored JSON without relying on per-star staging alone.
+
+### Phase 1 — Gaia queries (slow; run once)
+
+`bash scripts/query_website_gaia.sh` — writes `output/Gaia_DR3_<id>_summary.txt` (metadata + external RVs) and patches G/BP/RP photometry.
+
+```bash
+screen -dmS dh_gaia_query bash -lc '
+  export REPO=/data2/darkhunter/dark-hunter_rv
+  export PY=/home/marley/anaconda2/envs/gaia-env/bin/python
+  export PYTHONPATH="$REPO" OUT="$REPO/output"
+  cd "$REPO" && bash scripts/query_website_gaia.sh
+'
+```
+
+Log: `logs/query_website_gaia.log` · Attach: `screen -r dh_gaia_query`
+
+### Phase 2 — Website table + UI (fast)
+
+`bash scripts/update_website_table_only.sh` — deploys static site, adds sample rows to `data.csv`, fills `N_obs`, `G (mag)`, masses, schedule columns. No Gaia queries.
+
+```bash
+screen -dmS dh_table_update bash -lc '
+  export REPO=/data2/darkhunter/dark-hunter_rv
+  export PY=/home/marley/anaconda2/envs/gaia-env/bin/python
+  export PYTHONPATH="$REPO"
+  export WEB_ROOT=/var/www/html/darkhunter/rv
+  export OUT="$REPO/output" REPORTS_DIR="$REPO/rv_fit_reports"
+  cd "$REPO" && bash scripts/update_website_table_only.sh
+'
+```
+
+Optional slow Gaia NSS for inclination/masses: `PREFETCH_GAIA_NSS=1 bash scripts/update_website_table_only.sh`
+
+Log: `logs/update_website_table_only.log` · Hard-refresh browser after completion.
+
+`bash scripts/repair_website_table.sh` is a thin wrapper around phase 2. Set `RUN_GAIA_QUERIES=1` to include phase 1 in the same run.
+
+### Phase 3 — Replot RV + fit figures (no refit)
+
+`bash scripts/replot_rv_website.sh` — observability cache, `replot_rv_figures_from_fits.py` (Keplerian fit + residuals + RV data), literature-only summaries via `--also-summaries-without-fits`, table column refresh.
+
+```bash
+screen -dmS dh_replot_rv bash -lc '
+  export REPO=/data2/darkhunter/dark-hunter_rv
+  export PY=/home/marley/anaconda2/envs/gaia-env/bin/python
+  export PYTHONPATH="$REPO"
+  export WEB_ROOT=/var/www/html/darkhunter/rv
+  export OUT="$REPO/output" REPORTS_DIR="$REPO/rv_fit_reports"
+  cd "$REPO" && bash scripts/replot_rv_website.sh
+'
+```
+
+Log: `logs/replot_rv_website.log`
+
+### Phase 4 — Full refit + plots + website (long)
+
+Per-star: pipeline (debias with current `bias_statistics.txt`) → Keplerian fit → RV plots → Hβ → stage to `WEB_ROOT`. Discovers stars from `SPEC_ROOT` only (literature-only sample stars without APF spectra are covered in phases 1–3).
+
+**Parallel (recommended):**
+
+```bash
+screen -dmS dh_full_refit bash -lc '
+  export REPO=/data2/darkhunter/dark-hunter_rv
+  export PY=/home/marley/anaconda2/envs/gaia-env/bin/python
+  export PYTHONPATH="$REPO"
+  export WEB_ROOT=/var/www/html/darkhunter/rv
+  export OUT="$REPO/output" REPORTS_DIR="$REPO/rv_fit_reports"
+  export SPEC_ROOT=/data2/gaia_stars/apf_reductions
+  cd "$REPO"
+  JOBS=4 NICE_LEVEL=10 PIPELINE_FORCE=1 FIT_FORCE=1 FIT_JITTER=1 QUERY_GAIA_ONLINE=0 \
+    bash scripts/refit_all_per_object_parallel.sh
+'
+```
+
+**Sequential:** replace the last line with `bash scripts/refit_all_per_object.sh`.
+
+Canary: `STAR_ID=77413727493690112 PIPELINE_FORCE=1 FIT_FORCE=1 bash scripts/refit_all_per_object.sh`
+
+Logs: `logs/refit_all_per_object_parallel.log`, `logs/refit_parallel/<gaia_id>.log`
 
 ## Three commands (ziggy)
 
@@ -171,10 +269,20 @@ PYTHONPATH=. python3 scripts/audit_pipeline_coverage.py --only-issues
 
 ### Step 1 — Repair table + frontend only (fast, no refit)
 
+Run phase 1 once if ATF22/E24 summaries are missing, then phase 2:
+
 ```bash
 cd /data2/darkhunter/dark-hunter_rv
 git pull
-PREFETCH_GAIA_NSS=1 bash scripts/repair_website_table.sh
+bash scripts/query_website_gaia.sh                    # once, slow
+bash scripts/update_website_table_only.sh             # fast (same as repair_website_table.sh)
+```
+
+Or combined legacy: `RUN_GAIA_QUERIES=1 bash scripts/repair_website_table.sh`
+
+Optional Gaia NSS: `PREFETCH_GAIA_NSS=1 bash scripts/update_website_table_only.sh`
+
+```bash
 PYTHONPATH=. python3 scripts/build_apf_observability_cache.py \
   --data-csv /var/www/html/darkhunter/rv/tables/data.csv \
   --output-dir /data2/darkhunter/dark-hunter_rv/output

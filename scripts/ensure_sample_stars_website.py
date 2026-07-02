@@ -162,9 +162,26 @@ def main() -> int:
     ap.add_argument("--observability-cache", default=None)
     ap.add_argument("--web-root", default=None)
     ap.add_argument("--force-gaia", action="store_true", help="Re-query Gaia for every sample star")
+    ap.add_argument(
+        "--summaries-only",
+        action="store_true",
+        help="Query Gaia and write summaries only (skip data.csv and plots)",
+    )
+    ap.add_argument(
+        "--table-only",
+        action="store_true",
+        help="Add sample rows to data.csv from existing summaries (no Gaia queries)",
+    )
     ap.add_argument("--with-plots", action="store_true", help="Build RV data plots when epochs exist")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+
+    if args.summaries_only and args.table_only:
+        print("[ERROR] cannot use --summaries-only with --table-only", file=sys.stderr)
+        return 2
+    if args.with_plots and (args.summaries_only or args.table_only):
+        print("[ERROR] --with-plots cannot be combined with --summaries-only or --table-only", file=sys.stderr)
+        return 2
 
     repo = Path(__file__).resolve().parents[1]
     tags_path = Path(args.tags_json) if args.tags_json else repo / "website/rv/tables/sample_tags.json"
@@ -178,25 +195,28 @@ def main() -> int:
     if not tags_path.is_file():
         print(f"[ERROR] missing {tags_path}", file=sys.stderr)
         return 2
-    if not data_csv.is_file():
+    if not args.summaries_only and not data_csv.is_file():
         print(f"[ERROR] missing {data_csv}", file=sys.stderr)
         return 2
 
     sample_ids = load_sample_gaia_ids(tags_path)
     print(f"sample tags: {len(sample_ids)} unique Gaia id(s) from {tags_path.name}")
 
-    n_summ = 0
-    for gid in sorted(sample_ids):
-        if args.dry_run:
-            print(f"  [dry-run] summary Gaia_DR3_{gid}")
-            continue
-        path = ensure_summary(out_dir, gid, force_gaia=args.force_gaia)
-        if path is not None:
-            n_summ += 1
-        else:
-            print(f"[WARN] Gaia_DR3_{gid}: could not write summary", file=sys.stderr)
+    if not args.table_only:
+        n_summ = 0
+        for gid in sorted(sample_ids):
+            if args.dry_run:
+                print(f"  [dry-run] summary Gaia_DR3_{gid}")
+                continue
+            path = ensure_summary(out_dir, gid, force_gaia=args.force_gaia)
+            if path is not None:
+                n_summ += 1
+            else:
+                print(f"[WARN] Gaia_DR3_{gid}: could not write summary", file=sys.stderr)
+        if not args.dry_run:
+            print(f"summaries written/updated: {n_summ}")
 
-    if args.dry_run:
+    if args.dry_run or args.summaries_only:
         return 0
 
     table_stats = ensure_table_rows(data_csv, sample_ids, out_dir)
