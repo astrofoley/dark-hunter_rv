@@ -106,7 +106,7 @@ def ensure_table_rows(
     return {"added_rows": added, "total_rows": len(data_rows), "columns": len(hdr)}
 
 
-function run_rv_plots_for_ids(
+def run_rv_plots_for_ids(
     sample_ids: Set[str],
     *,
     repo: Path,
